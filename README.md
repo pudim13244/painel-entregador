@@ -1,10 +1,14 @@
-# Welcome to your Lovable project
+# QuickEntregadores
 
 ## Project info
 
 **URL**: https://lovable.dev/projects/c5afe26e-d3b0-4a07-99d7-4bcdc0da9e25
 
-## How can I edit this code?
+## Sobre o Projeto
+
+QuickEntregadores é uma plataforma para gerenciamento de entregadores, permitindo que eles recebam e gerenciem pedidos de entrega de forma eficiente.
+
+## Como editar este código?
 
 There are several ways of editing your application.
 
