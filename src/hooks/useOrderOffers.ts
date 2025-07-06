@@ -120,15 +120,9 @@ export const useOrderOffers = () => {
     }
   };
 
-  // Polling para buscar ofertas a cada 2 segundos
+  // Buscar ofertas apenas uma vez ao montar o componente
   useEffect(() => {
     fetchOffers();
-    pollingRef.current = setInterval(fetchOffers, 2000);
-    return () => {
-      if (pollingRef.current) {
-        clearInterval(pollingRef.current);
-      }
-    };
   }, []);
 
   // Timer visual baseado no created_at da oferta

@@ -38,8 +38,10 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
   const navigate = useNavigate();
 
   const checkAuth = async (): Promise<boolean> => {
-    const token = localStorage.getItem('delivery_token');
-    if (!token) {
+    const token = localStorage.getItem('token');
+    const userData = localStorage.getItem('user');
+    
+    if (!token || !userData) {
       setUser(null);
       setLoading(false);
       return false;
@@ -53,7 +55,8 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
       return true;
     } catch (error) {
       console.error('Token inválido ou expirado:', error);
-      localStorage.removeItem('delivery_token');
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
       setUser(null);
       setLoading(false);
       return false;
@@ -65,7 +68,8 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
       const response = await api.post('/login', { email, password });
       const { token, user } = response.data;
       
-      localStorage.setItem('delivery_token', token);
+      localStorage.setItem('token', token);
+      localStorage.setItem('user', JSON.stringify(user));
       setUser(user);
     } catch (error) {
       throw error;
@@ -73,21 +77,19 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
   };
 
   const logout = () => {
-    localStorage.removeItem('delivery_token');
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
     setUser(null);
     navigate('/login');
   };
 
   useEffect(() => {
     const initAuth = async () => {
-      const isAuth = await checkAuth();
-      if (!isAuth) {
-        navigate('/login');
-      }
+      await checkAuth();
     };
 
     initAuth();
-  }, [navigate]);
+  }, []);
 
   return (
     <AuthContext.Provider value={{

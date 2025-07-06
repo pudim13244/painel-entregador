@@ -987,15 +987,14 @@ const Index = () => {
       const formData = new FormData();
       formData.append('photo', file);
       try {
-        const token = localStorage.getItem('delivery_token');
-        const response = await fetch('/upload/profile-photo', {
-          method: 'POST',
+        const token = localStorage.getItem('token');
+        const response = await api.post('/upload/profile-photo', formData, {
           headers: {
+            'Content-Type': 'multipart/form-data',
             Authorization: `Bearer ${token}`,
           },
-          body: formData,
         });
-        const data = await response.json();
+        const data = response.data;
         if (data.url) {
           setFormState(prev => ({
             ...prev,
@@ -1006,6 +1005,7 @@ const Index = () => {
           toast.error('Erro ao enviar foto');
         }
       } catch (err) {
+        console.error('Erro ao enviar foto:', err);
         toast.error('Erro ao enviar foto');
       }
     };

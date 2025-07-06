@@ -15,7 +15,7 @@ interface DeliveryProfile {
 }
 
 const api = axios.create({
-  baseURL: 'http://localhost:4000',
+  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:4000',
   headers: {
     'Content-Type': 'application/json',
   },
@@ -23,7 +23,7 @@ const api = axios.create({
 
 // Interceptor para adicionar o token JWT em todas as requisições
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('delivery_token');
+  const token = localStorage.getItem('token');
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
@@ -36,7 +36,8 @@ api.interceptors.response.use(
   error => {
     if (error.response && error.response.status === 401) {
       // Apenas redireciona para login se for erro 401 (não autenticado)
-      localStorage.removeItem('delivery_token');
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
       window.location.href = '/login';
     }
     return Promise.reject(error);

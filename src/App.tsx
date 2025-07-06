@@ -8,6 +8,7 @@ import PrivateRoute from "@/components/PrivateRoute";
 import Index from "./pages/Index";
 import NotFound from "./pages/NotFound";
 import Login from "./pages/Login";
+import Register from "./pages/Register";
 import Notifications from "@/pages/Notifications";
 import Faturamento from "@/pages/Faturamento";
 import ActiveOrders from "@/pages/ActiveOrders";
@@ -23,6 +24,7 @@ const App = () => (
           <Sonner />
           <Routes>
             <Route path="/login" element={<Login />} />
+            <Route path="/register" element={<Register />} />
             <Route element={<PrivateRoute />}>
               <Route path="/" element={<Index />} />
               <Route path="/notifications" element={<Notifications />} />

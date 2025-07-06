@@ -13,7 +13,7 @@ export function PWAStatus() {
     updatePWA,
     subscribePush
   } = usePWA();
-  const token = localStorage.getItem('delivery_token');
+  const token = localStorage.getItem('token');
 
   if (isLoading) {
     return null;

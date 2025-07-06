@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { Input } from '../components/ui/input';
 import { Button } from '../components/ui/button';
@@ -9,16 +9,16 @@ import { toast } from 'sonner';
 const Login: React.FC = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [submitLoading, setSubmitLoading] = useState(false);
   const navigate = useNavigate();
-  const { login, isAuthenticated } = useAuth();
+  const { login, isAuthenticated, loading } = useAuth();
 
   // Se já estiver autenticado, redireciona para a página principal
   useEffect(() => {
-    if (isAuthenticated) {
+    if (isAuthenticated && !loading) {
       navigate('/');
     }
-  }, [isAuthenticated, navigate]);
+  }, [isAuthenticated, loading, navigate]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -26,7 +26,7 @@ const Login: React.FC = () => {
       toast.error('Preencha e-mail e senha!');
       return;
     }
-    setLoading(true);
+    setSubmitLoading(true);
     try {
       await login(email, password);
       toast.success('Login realizado com sucesso!');
@@ -34,7 +34,7 @@ const Login: React.FC = () => {
     } catch (err: any) {
       toast.error(err.response?.data?.message || 'Erro ao fazer login');
     } finally {
-      setLoading(false);
+      setSubmitLoading(false);
     }
   };
 
@@ -66,9 +66,21 @@ const Login: React.FC = () => {
             className="mt-1"
           />
         </div>
-        <Button type="submit" className="w-full" disabled={loading}>
-          {loading ? 'Entrando...' : 'Entrar'}
+        <Button type="submit" className="w-full" disabled={submitLoading}>
+          {submitLoading ? 'Entrando...' : 'Entrar'}
         </Button>
+        
+        <div className="text-center mt-4">
+          <p className="text-sm text-gray-600">
+            Não tem uma conta?{" "}
+            <Link
+              to="/register"
+              className="font-medium text-blue-600 hover:text-blue-500"
+            >
+              Cadastre-se aqui
+            </Link>
+          </p>
+        </div>
       </form>
     </div>
   );

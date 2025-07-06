@@ -12,12 +12,12 @@ export default defineConfig(({ mode }) => ({
     port: 8080,
     proxy: {
       '/upload': {
-        target: 'http://localhost:4000',
+        target: process.env.VITE_API_URL || 'http://localhost:4000',
         changeOrigin: true,
         secure: false,
       },
       '/push': {
-        target: 'http://localhost:4000',
+        target: process.env.VITE_API_URL || 'http://localhost:4000',
         changeOrigin: true,
         secure: false,
       },
