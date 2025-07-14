@@ -94,10 +94,10 @@ export const OrderOfferModal: React.FC<OrderOfferModalProps> = ({
           <div className="w-full bg-gray-200 rounded-full h-2">
             <div 
               className={`h-2 rounded-full transition-all duration-1000 ${
-                timeLeft <= 1 ? 'bg-red-500' : 
-                timeLeft <= 2 ? 'bg-orange-500' : 'bg-green-500'
+                timeLeft <= 3 ? 'bg-red-500' : 
+                timeLeft <= 7 ? 'bg-orange-500' : 'bg-green-500'
               }`}
-              style={{ width: `${(timeLeft / 5) * 100}%` }}
+              style={{ width: `${(timeLeft / 20) * 100}%` }}
             />
           </div>
 

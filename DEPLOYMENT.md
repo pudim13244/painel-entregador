@@ -17,7 +17,7 @@ echo "VITE_API_URL=http://localhost:4000" > .env.development
 cp env.production .env.production
 
 # Ou crie manualmente o arquivo .env.production
-echo "VITE_API_URL=https://api.vmagenciadigital.com/entregadoresquick" > .env.production
+echo "VITE_API_URL=https://api.vmagenciadigital.com/entregadoresquick/
 ```
 
 ## 🔧 Build para Produção

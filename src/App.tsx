@@ -12,6 +12,7 @@ import Register from "./pages/Register";
 import Notifications from "@/pages/Notifications";
 import Faturamento from "@/pages/Faturamento";
 import ActiveOrders from "@/pages/ActiveOrders";
+import FaturamentoEstabelecimento from "@/pages/FaturamentoEstabelecimento";
 
 const queryClient = new QueryClient();
 
@@ -29,6 +30,7 @@ const App = () => (
               <Route path="/" element={<Index />} />
               <Route path="/notifications" element={<Notifications />} />
               <Route path="/faturamento" element={<Faturamento />} />
+              <Route path="/faturamento/estabelecimento/:id" element={<FaturamentoEstabelecimento />} />
               <Route path="/active-orders" element={<ActiveOrders />} />
             </Route>
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}

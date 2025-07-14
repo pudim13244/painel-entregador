@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -48,10 +48,27 @@ import { PWAStatus } from "@/components/PWAStatus";
 import { useNotifications } from "@/hooks/useNotifications";
 import { useOrderOffers } from "@/hooks/useOrderOffers";
 import { OrderOfferModal } from "@/components/OrderOfferModal";
+import { io } from "socket.io-client";
+import notificationSound from "@/../public/sounds/notification.mp3";
+
+// Função utilitária para calcular segundos restantes
+function getSecondsLeft(createdAt: string) {
+  // Garante que a data seja interpretada como UTC
+  let dateStr = createdAt;
+  if (!dateStr.endsWith('Z')) {
+    dateStr += 'Z';
+  }
+  const created = new Date(dateStr).getTime();
+  const now = Date.now();
+  const diff = Math.floor((now - created) / 1000);
+  return Math.max(15 - diff, 0);
+}
 
 const Index = () => {
   const { user, logout } = useAuth();
   const [pendingOrders, setPendingOrders] = useState<any[]>([]);
+  const offerTimers = useRef<{ [offerId: number]: number }>({});
+  const [offerCountdowns, setOfferCountdowns] = useState<{ [offerId: number]: number }>({});
   const [deliveryPerson, setDeliveryPerson] = useState<any>(null);
   const [isAvailable, setIsAvailable] = useState(() => {
     const saved = localStorage.getItem('isAvailable');
@@ -77,6 +94,7 @@ const Index = () => {
     photo_url: deliveryPerson?.photo_url || "",
   });
   const [todayFaturamento, setTodayFaturamento] = useState(0);
+  const [weekFaturamento, setWeekFaturamento] = useState(0);
   const { unreadCount: unreadNotifications, fetchUnreadCount } = useNotifications();
   const { 
     currentOffer, 
@@ -85,18 +103,19 @@ const Index = () => {
     acceptOffer, 
     rejectOffer 
   } = useOrderOffers();
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   // Sempre que mudar, salva no localStorage
   useEffect(() => {
     localStorage.setItem('isAvailable', JSON.stringify(isAvailable));
   }, [isAvailable]);
 
-  // Buscar pedidos disponíveis (apenas quando disponível)
+  // 1. Trocar busca de pedidos disponíveis para buscar ofertas do entregador
   useEffect(() => {
-    const fetchOrders = async () => {
+    const fetchOffers = async () => {
       setLoading(true);
       try {
-        const response = await api.get('/orders/available');
+        const response = await api.get('/order-offers');
         setPendingOrders(response.data);
       } catch (err) {
         setPendingOrders([]);
@@ -106,28 +125,114 @@ const Index = () => {
     };
 
     if (isAvailable) {
-      fetchOrders(); // Busca apenas uma vez quando fica disponível
+      fetchOffers();
     } else {
       setPendingOrders([]);
     }
   }, [isAvailable]);
 
-  // Buscar pedidos em andamento
+  // Atualizar ofertas em tempo real via WebSocket
   useEffect(() => {
-    const fetchActiveOrders = async () => {
-      try {
-        const response = await api.get('/orders/active');
-        // Filtrar apenas pedidos atribuídos ao entregador logado
-        const filteredOrders = response.data.filter((order: any) => {
-          const isAssignedToUser = Number(order.delivery_id) === user?.id;
-          console.log(`Pedido ${order.id}: delivery_id=${order.delivery_id}, user.id=${user?.id}, isAssigned=${isAssignedToUser}`);
-          return isAssignedToUser;
-        });
-        setActiveOrders(filteredOrders);
-      } catch (err) {
-        setActiveOrders([]);
+    const socket = io(import.meta.env.VITE_API_URL || 'http://localhost:4000');
+    const user = JSON.parse(localStorage.getItem('user') || '{}');
+    if (user?.id) {
+      socket.emit('registrar_entregador', user.id);
+      socket.on('nova_oferta', async () => {
+        try {
+          const response = await api.get('/order-offers');
+          setPendingOrders(response.data);
+        } catch (err) {
+          setPendingOrders([]);
+        }
+      });
+    }
+    return () => {
+      socket.disconnect();
+    };
+  }, []);
+
+  // Sempre que pendingOrders mudar, inicia/atualiza timers locais de 10s
+  useEffect(() => {
+    const newCountdowns: { [offerId: number]: number } = {};
+    pendingOrders.forEach((offer) => {
+      if (!(offer.offer_id in offerTimers.current)) {
+        // Inicia timer de 10s para cada nova oferta
+        offerTimers.current[offer.offer_id] = window.setInterval(() => {
+          setOfferCountdowns((prev) => {
+            const next = { ...prev };
+            next[offer.offer_id] = (next[offer.offer_id] || 10) - 1;
+            if (next[offer.offer_id] <= 0) {
+              // Remove oferta da tela
+              setPendingOrders((orders) => orders.filter((o) => o.offer_id !== offer.offer_id));
+              clearInterval(offerTimers.current[offer.offer_id]);
+              delete offerTimers.current[offer.offer_id];
+              delete next[offer.offer_id];
+            }
+            return next;
+          });
+        }, 1000);
+        newCountdowns[offer.offer_id] = 10;
+      } else {
+        // Mantém o countdown atual
+        newCountdowns[offer.offer_id] = offerCountdowns[offer.offer_id] || 10;
+      }
+    });
+    setOfferCountdowns(newCountdowns);
+    // Limpa timers de ofertas que sumiram
+    Object.keys(offerTimers.current).forEach((id) => {
+      if (!pendingOrders.find((o) => o.offer_id === Number(id))) {
+        clearInterval(offerTimers.current[Number(id)]);
+        delete offerTimers.current[Number(id)];
+      }
+    });
+    // eslint-disable-next-line
+  }, [pendingOrders]);
+
+  // Inicializa o elemento de áudio
+  useEffect(() => {
+    audioRef.current = new window.Audio(notificationSound);
+    audioRef.current.volume = 0.5;
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
       }
     };
+  }, []);
+
+  // Toca o som sempre que uma nova oferta aparecer
+  useEffect(() => {
+    if (pendingOrders.length > 0) {
+      if (audioRef.current) {
+        audioRef.current.loop = true;
+        audioRef.current.currentTime = 0;
+        audioRef.current.play().catch(() => {});
+      }
+    } else {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.currentTime = 0;
+      }
+    }
+  }, [pendingOrders.length]);
+
+  // Buscar pedidos em andamento
+  const fetchActiveOrders = async () => {
+    try {
+      const response = await api.get('/orders/active');
+      // Filtrar apenas pedidos atribuídos ao entregador logado
+      const filteredOrders = response.data.filter((order: any) => {
+        const isAssignedToUser = Number(order.delivery_id) === user?.id;
+        return isAssignedToUser;
+      });
+      setActiveOrders(filteredOrders);
+    } catch (err) {
+      setActiveOrders([]);
+    }
+  };
+
+  // Buscar pedidos em andamento
+  useEffect(() => {
     if (isAvailable && user?.id) {
       fetchActiveOrders();
     } else {
@@ -205,6 +310,49 @@ const Index = () => {
     }
   };
 
+  // Buscar faturamento do dia e da semana
+  const fetchFaturamento = async () => {
+    try {
+      const response = await api.get('/delivery-history');
+      const allOrders = response.data;
+      const today = new Date();
+      const startOfWeek = new Date(today);
+      startOfWeek.setDate(today.getDate() - today.getDay());
+      startOfWeek.setHours(0, 0, 0, 0);
+      const endOfWeek = new Date(startOfWeek);
+      endOfWeek.setDate(startOfWeek.getDate() + 6);
+      endOfWeek.setHours(23, 59, 59, 999);
+
+      // Faturamento do dia
+      const todayOrders = allOrders.filter((order: any) => {
+        if (!order.finished_at) return false;
+        const orderDate = new Date(order.finished_at);
+        return (
+          !isNaN(orderDate.getTime()) &&
+          orderDate.getDate() === today.getDate() &&
+          orderDate.getMonth() === today.getMonth() &&
+          orderDate.getFullYear() === today.getFullYear()
+        );
+      });
+      const totalToday = todayOrders.reduce((sum: number, order: any) => sum + (order.delivery_fee || 0), 0);
+      setTodayFaturamento(totalToday);
+
+      // Faturamento da semana
+      const weekOrders = allOrders.filter((order: any) => {
+        if (!order.finished_at) return false;
+        const orderDate = new Date(order.finished_at);
+        return !isNaN(orderDate.getTime()) && orderDate >= startOfWeek && orderDate <= endOfWeek;
+      });
+      const totalWeek = weekOrders.reduce((sum: number, order: any) => sum + (order.delivery_fee || 0), 0);
+      setWeekFaturamento(totalWeek);
+    } catch (error) {
+      console.error('Erro ao buscar faturamento:', error);
+    }
+  };
+
+  useEffect(() => {
+    fetchFaturamento();
+  }, []);
 
 
   // Função para checar se o perfil está completo
@@ -233,18 +381,17 @@ const Index = () => {
     return faltando;
   }
 
-  // Função para atualizar manualmente os pedidos disponíveis
+  // 2. Atualizar refreshOrders para buscar ofertas
   const refreshOrders = async () => {
     if (!isAvailable) return;
-    
     setLoading(true);
     try {
-      const response = await api.get('/orders/available');
+      const response = await api.get('/order-offers');
       setPendingOrders(response.data);
-      toast.success('Pedidos atualizados!');
+      toast.success('Ofertas atualizadas!', { duration: 2000 });
     } catch (err) {
       setPendingOrders([]);
-      toast.error('Erro ao atualizar pedidos');
+      toast.error('Erro ao atualizar ofertas', { duration: 2000 });
     } finally {
       setLoading(false);
     }
@@ -363,7 +510,7 @@ const Index = () => {
                 <DollarSign className="h-5 w-5 text-green-600" />
                 <div>
                   <p className="text-sm text-muted-foreground">Hoje</p>
-                    <p className="text-xl font-semibold">R$ {(deliveryPerson?.todayEarnings ?? 0).toFixed(2)}</p>
+                  <p className="text-xl font-semibold">R$ {Number(todayFaturamento || 0).toFixed(2)}</p>
                 </div>
               </div>
             </CardContent>
@@ -374,7 +521,7 @@ const Index = () => {
                 <DollarSign className="h-5 w-5 text-blue-600" />
                 <div>
                   <p className="text-sm text-muted-foreground">Esta semana</p>
-                    <p className="text-xl font-semibold">R$ {(deliveryPerson?.weekEarnings ?? 0).toFixed(2)}</p>
+                  <p className="text-xl font-semibold">R$ {Number(weekFaturamento || 0).toFixed(2)}</p>
                 </div>
               </div>
             </CardContent>
@@ -405,31 +552,51 @@ const Index = () => {
                 <div>Nenhum pedido disponível no momento.</div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {pendingOrders.map((order) => (
-                    <Card key={order.pedido_id} className="border-green-500">
-                      <CardContent className="p-4">
-                        <div className="flex justify-between items-center mb-2">
-                          <span className="font-semibold text-lg">Pedido #{order.pedido_id}</span>
-                          <Badge variant="secondary">Disponível</Badge>
-                        </div>
-                        <div className="mb-2">
-                          <strong>Cliente:</strong> {order.cliente}<br />
-                          <strong>Telefone:</strong> {order.telefone}<br />
-                          <strong>Endereço:</strong> {order.endereco}<br />
-                          <strong>Estabelecimento:</strong> {order.estabelecimento}<br />
-                          <strong>Retirada:</strong> {order.retirada}<br />
-                          <strong>Data:</strong> {order.data ? new Date(order.data).toLocaleString() : '-'}
-                        </div>
+              {pendingOrders.map((offer) => {
+                const secondsLeft = offerCountdowns[offer.offer_id] ?? 10;
+                if (secondsLeft <= 0) return null;
+                // Barra de progresso baseada no tempo restante (10s)
+                const progressPercent = Math.max(0, (secondsLeft / 10) * 100);
+                let progressColor = 'bg-green-500';
+                if (secondsLeft <= 2) progressColor = 'bg-red-500';
+                else if (secondsLeft <= 5) progressColor = 'bg-orange-500';
+                return (
+                  <Card key={offer.offer_id} className="border-green-500">
+                    <CardContent className="p-4">
+                      <div className="flex justify-between items-center mb-2">
+                        <span className="font-semibold text-lg">Pedido #{offer.pedido_id}</span>
+                        <Badge variant="secondary">Disponível</Badge>
+                      </div>
+                      <div className="mb-2">
+                        <strong>Cliente:</strong> {offer.cliente}<br />
+                        <strong>Telefone:</strong> {offer.telefone}<br />
+                        <strong>Endereço:</strong> {offer.endereco}<br />
+                        <strong>Estabelecimento:</strong> {offer.estabelecimento}<br />
+                        <strong>Data:</strong> {offer.order_created_at ? new Date(offer.order_created_at).toLocaleString() : '-'}
+                      </div>
+                      {/* Barra de progresso do tempo */}
+                      <div className="w-full bg-gray-200 rounded-full h-2 mb-2 overflow-hidden">
+                        <div
+                          className={`h-2 transition-all duration-1000 ${progressColor}`}
+                          style={{ width: `${progressPercent}%` }}
+                        />
+                      </div>
+                      <div className="flex items-center gap-2">
                         <Button
                           size="sm"
                           className="w-full mt-2"
-                          onClick={() => handleAcceptOrder(order.pedido_id)}
+                          onClick={() => handleAcceptOffer(offer.offer_id)}
                         >
                           Aceitar Entrega
                         </Button>
-                      </CardContent>
-                    </Card>
-                  ))}
+                        <span className="text-sm text-gray-500 font-mono w-12 text-center">
+                          {secondsLeft}s
+                        </span>
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })}
                 </div>
               )}
             </>
@@ -520,7 +687,8 @@ const Index = () => {
   );
   };
 
-  // Detalhes do Pedido / Restaurante
+  // Remover o componente OrderDetails
+  // Ajustar para exibir detalhes do pedido aceito em modal ou expandido no card
   const OrderDetails = () => (
     <div className="min-h-screen bg-gray-50">
       <div className="bg-white shadow-sm border-b p-4">
@@ -987,14 +1155,15 @@ const Index = () => {
       const formData = new FormData();
       formData.append('photo', file);
       try {
-        const token = localStorage.getItem('token');
-        const response = await api.post('/upload/profile-photo', formData, {
+        const token = localStorage.getItem('delivery_token');
+        const response = await fetch('/upload/profile-photo', {
+          method: 'POST',
           headers: {
-            'Content-Type': 'multipart/form-data',
             Authorization: `Bearer ${token}`,
           },
+          body: formData,
         });
-        const data = response.data;
+        const data = await response.json();
         if (data.url) {
           setFormState(prev => ({
             ...prev,
@@ -1005,7 +1174,6 @@ const Index = () => {
           toast.error('Erro ao enviar foto');
         }
       } catch (err) {
-        console.error('Erro ao enviar foto:', err);
         toast.error('Erro ao enviar foto');
       }
     };
@@ -1265,7 +1433,7 @@ const Index = () => {
   const handleAcceptOrder = async (orderId: number) => {
     try {
       await api.post(`/orders/${orderId}/accept`);
-      toast.success('Pedido aceito com sucesso!');
+      toast.success('Pedido aceito com sucesso!', { duration: 2000 });
       // Busca os detalhes do pedido aceito para exibir na próxima tela
       const response = await api.get(`/orders/${orderId}`);
       setSelectedOrder(response.data);
@@ -1274,13 +1442,13 @@ const Index = () => {
       setPendingOrders(prev => prev.filter(order => order.pedido_id !== orderId));
     } catch (err: any) {
       if (err.response?.status === 400) {
-        toast.error('Pedido não está mais disponível para entrega');
+        toast.error('Pedido não está mais disponível para entrega', { duration: 2000 });
         // Remove o pedido da lista se não estiver mais disponível
         setPendingOrders(prev => prev.filter(order => order.pedido_id !== orderId));
       } else if (err.response?.status === 404) {
-        toast.error('Pedido não encontrado');
+        toast.error('Pedido não encontrado', { duration: 2000 });
       } else {
-        toast.error(err.response?.data?.message || 'Erro ao aceitar pedido');
+        toast.error(err.response?.data?.message || 'Erro ao aceitar pedido', { duration: 2000 });
       }
     }
   };
@@ -1291,17 +1459,17 @@ const Index = () => {
       // Verificar se o pedido está atribuído ao entregador logado
       const order = activeOrders.find((o: any) => o.id === orderId);
       if (!order) {
-        toast.error('Pedido não encontrado');
+        toast.error('Pedido não encontrado', { duration: 2000 });
         return;
       }
       if (Number(order.delivery_id) !== user?.id) {
         console.log(`Tentativa de finalizar pedido ${orderId}: delivery_id=${order.delivery_id}, user.id=${user?.id}`);
-        toast.error('Você não tem permissão para finalizar este pedido');
+        toast.error('Você não tem permissão para finalizar este pedido', { duration: 2000 });
         return;
       }
 
       await api.post(`/orders/${orderId}/finish`);
-      toast.success('Entrega finalizada com sucesso!');
+      toast.success('Entrega finalizada com sucesso!', { duration: 2000 });
       // Atualiza a lista de pedidos em andamento
       const response = await api.get('/orders/active');
       const filteredOrders = response.data.filter((order: any) => 
@@ -1310,12 +1478,26 @@ const Index = () => {
       setActiveOrders(filteredOrders);
     } catch (err: any) {
       if (err.response?.status === 403) {
-        toast.error('Você não tem permissão para finalizar este pedido ou ele não está em entrega');
+        toast.error('Você não tem permissão para finalizar este pedido ou ele não está em entrega', { duration: 2000 });
       } else if (err.response?.status === 404) {
-        toast.error('Pedido não encontrado');
+        toast.error('Pedido não encontrado', { duration: 2000 });
       } else {
-        toast.error(err.response?.data?.message || 'Erro ao finalizar entrega');
+        toast.error(err.response?.data?.message || 'Erro ao finalizar entrega', { duration: 2000 });
       }
+    }
+  };
+
+  // 4. O botão de aceitar deve chamar o endpoint de aceitar oferta
+  const handleAcceptOffer = async (offerId: number) => {
+    try {
+      await api.post(`/order-offers/${offerId}/accept`);
+      toast.success('Pedido aceito com sucesso!', { duration: 2000 });
+      refreshOrders(); // Atualiza as ofertas
+      // Atualiza imediatamente os pedidos em andamento
+      fetchActiveOrders();
+      // Opcional: buscar detalhes do pedido aceito se necessário
+    } catch (err: any) {
+      toast.error(err.response?.data?.message || 'Erro ao aceitar oferta', { duration: 2000 });
     }
   };
 
@@ -1323,10 +1505,6 @@ const Index = () => {
   switch (currentScreen) {
     case "orderDetails":
       return <OrderDetails />;
-    case "collected":
-      return <CollectedScreen />;
-    case "delivery":
-      return <DeliveryScreen />;
     case "history":
       return <HistoryScreen />;
     case "profile":
@@ -1335,6 +1513,25 @@ const Index = () => {
       return (
         <>
           <Dashboard />
+          {selectedOrder && (
+            <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
+              <div className="bg-white rounded-lg shadow-lg p-6 w-full max-w-md relative">
+                <button className="absolute top-2 right-2 text-gray-400 hover:text-gray-600" onClick={() => setSelectedOrder(null)}>
+                  &times;
+                </button>
+                <h2 className="text-lg font-bold mb-4">Detalhes do Pedido</h2>
+                <div className="mb-2">
+                  <strong>Estabelecimento:</strong> {selectedOrder.establishment_name || selectedOrder.estabelecimento || selectedOrder.restaurant}<br />
+                  <strong>Endereço Estabelecimento:</strong> {selectedOrder.establishment_address || selectedOrder.retirada || selectedOrder.restaurantAddress}<br />
+                </div>
+                <div className="mb-2">
+                  <strong>Cliente:</strong> {selectedOrder.customer_name || selectedOrder.cliente || selectedOrder.customerName}<br />
+                  <strong>Endereço Cliente:</strong> {selectedOrder.customer_address || selectedOrder.endereco || selectedOrder.customerAddress}<br />
+                  <strong>Telefone Cliente:</strong> {selectedOrder.customer_phone || selectedOrder.telefone}<br />
+                </div>
+              </div>
+            </div>
+          )}
           <OrderOfferModal
             offer={currentOffer}
             timeLeft={timeLeft}
