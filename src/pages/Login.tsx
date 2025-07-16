@@ -13,25 +13,33 @@ const Login: React.FC = () => {
   const navigate = useNavigate();
   const { login, isAuthenticated, loading } = useAuth();
 
+  console.log('🔐 Login - isAuthenticated:', isAuthenticated, 'loading:', loading);
+
   // Se já estiver autenticado, redireciona para a página principal
   useEffect(() => {
     if (isAuthenticated && !loading) {
+      console.log('✅ Login - Usuário já autenticado, redirecionando para /');
       navigate('/');
     }
   }, [isAuthenticated, loading, navigate]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    console.log('📝 Login - Tentando fazer login com:', email);
+    
     if (!email.trim() || !password.trim()) {
       toast.error('Preencha e-mail e senha!');
       return;
     }
+    
     setSubmitLoading(true);
     try {
       await login(email, password);
       toast.success('Login realizado com sucesso!');
+      console.log('✅ Login - Login bem-sucedido, redirecionando para /');
       navigate('/'); // Redireciona para a tela principal do entregador
     } catch (err: any) {
+      console.error('❌ Login - Erro no login:', err);
       toast.error(err.response?.data?.message || 'Erro ao fazer login');
     } finally {
       setSubmitLoading(false);

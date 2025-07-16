@@ -39,7 +39,11 @@ import {
   LogOut,
   Edit2,
   Save,
-  RefreshCw
+  RefreshCw,
+  CreditCard,
+  TrendingUp,
+  Calendar,
+  Zap
 } from "lucide-react";
 import api, { fetchDeliveryProfile, updateDeliveryProfile } from "@/services/api";
 import { toast } from 'sonner';
@@ -47,13 +51,12 @@ import { useAuth } from "@/contexts/AuthContext";
 import { PWAStatus } from "@/components/PWAStatus";
 import { useNotifications } from "@/hooks/useNotifications";
 import { useOrderOffers } from "@/hooks/useOrderOffers";
-import { OrderOfferModal } from "@/components/OrderOfferModal";
+
 import { io } from "socket.io-client";
 import notificationSound from "@/../public/sounds/notification.mp3";
 
 // Função utilitária para calcular segundos restantes
 function getSecondsLeft(createdAt: string) {
-  // Garante que a data seja interpretada como UTC
   let dateStr = createdAt;
   if (!dateStr.endsWith('Z')) {
     dateStr += 'Z';
@@ -62,6 +65,17 @@ function getSecondsLeft(createdAt: string) {
   const now = Date.now();
   const diff = Math.floor((now - created) / 1000);
   return Math.max(15 - diff, 0);
+}
+
+// Funções auxiliares
+function isThisWeek(dateString: string) {
+  const date = new Date(dateString);
+  const now = new Date();
+  const startOfWeek = new Date(now);
+  startOfWeek.setDate(now.getDate() - now.getDay());
+  const endOfWeek = new Date(startOfWeek);
+  endOfWeek.setDate(startOfWeek.getDate() + 6);
+  return date >= startOfWeek && date <= endOfWeek;
 }
 
 const Index = () => {
@@ -105,12 +119,206 @@ const Index = () => {
   } = useOrderOffers();
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
+  // Funções auxiliares
+  const refreshOrders = async () => {
+    setLoading(true);
+    try {
+      const response = await api.get('/order-offers');
+      setPendingOrders(response.data);
+    } catch (err) {
+      setPendingOrders([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchActiveOrders = async () => {
+    try {
+      const response = await api.get('/orders/active');
+      setActiveOrders(response.data);
+    } catch (err) {
+      setActiveOrders([]);
+    }
+  };
+
+  const fetchTodayFaturamento = async () => {
+    try {
+      const response = await api.get('/orders/history');
+      const today = new Date().toISOString().split('T')[0];
+      const todayOrders = response.data.filter((order: any) => 
+        order.finished_at && order.finished_at.startsWith(today)
+      );
+      const total = todayOrders.reduce((sum: number, order: any) => 
+        sum + Number(order.delivery_fee || 0), 0
+      );
+      setTodayFaturamento(total);
+    } catch (err) {
+      setTodayFaturamento(0);
+    }
+  };
+
+  const fetchFaturamento = async () => {
+    try {
+      const response = await api.get('/delivery-history');
+      const weekOrders = response.data.filter((order: any) => 
+        order.finished_at && isThisWeek(order.finished_at)
+      );
+      const total = weekOrders.reduce((sum: number, order: any) => 
+        sum + Number(order.delivery_fee || 0), 0
+      );
+      setWeekFaturamento(total);
+    } catch (err) {
+      setWeekFaturamento(0);
+    }
+  };
+
+  const fetchProfile = async () => {
+    try {
+      const profile = await fetchDeliveryProfile();
+      setDeliveryPerson(profile);
+      setForm({
+        name: profile?.name || "",
+        email: profile?.email || "",
+        cpf: profile?.cpf || "",
+        phone: profile?.phone || "",
+        vehicle_type: profile?.vehicle_type || "",
+        vehicle_model: profile?.vehicle_model || "",
+        has_plate: profile?.has_plate || false,
+        plate: profile?.plate || "",
+        photo_url: profile?.photo_url || "",
+      });
+    } catch (err) {
+      console.error('Erro ao buscar perfil:', err);
+    }
+  };
+
+  const fetchHistory = async () => {
+    try {
+      const response = await api.get('/delivery-history');
+      setHistory(response.data);
+    } catch (err) {
+      setHistory([]);
+    }
+  };
+
+  // Handlers
+  const handleAcceptOffer = async (offerId: number) => {
+    try {
+      await api.post(`/order-offers/${offerId}/accept`);
+      toast.success("Oferta aceita com sucesso!");
+      refreshOrders();
+      fetchActiveOrders();
+    } catch (err) {
+      toast.error("Erro ao aceitar oferta");
+    }
+  };
+
+  const handleFinishOrder = async (orderId: number) => {
+    try {
+      await api.post(`/orders/${orderId}/finish`);
+      toast.success("Entrega finalizada com sucesso!");
+      fetchActiveOrders();
+      fetchTodayFaturamento();
+      fetchFaturamento();
+    } catch (err) {
+      toast.error("Erro ao finalizar entrega");
+    }
+  };
+
+  const handleAvailabilityChange = (checked: boolean) => {
+    setIsAvailable(checked);
+    if (checked && !isProfileComplete()) {
+      setShowProfileAlert(true);
+      setIsAvailable(false);
+    }
+  };
+
+  function isProfileComplete(formData = form) {
+    const requiredFields = ['name', 'email', 'phone', 'vehicle_type'];
+    return requiredFields.every(field => formData[field] && formData[field].trim() !== '');
+  }
+
+  function getCamposFaltando(form: any) {
+    const requiredFields = [
+      { key: 'name', label: 'Nome' },
+      { key: 'email', label: 'Email' },
+      { key: 'phone', label: 'Telefone' },
+      { key: 'vehicle_type', label: 'Tipo de Veículo' }
+    ];
+    
+    return requiredFields
+      .filter(field => !form[field.key] || form[field.key].trim() === '')
+      .map(field => field.label);
+  }
+
+  const FooterBar = ({ notifications, faturamento, activeOrders, currentScreen }: { notifications: number, faturamento: number, activeOrders: number, currentScreen: string }) => {
+    const formatCurrency = (value: number) => {
+      return new Intl.NumberFormat('pt-BR', {
+        style: 'currency',
+        currency: 'BRL'
+      }).format(value);
+    };
+
+    return (
+      <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 p-4">
+        <div className="flex justify-around items-center">
+          <div 
+            className={`flex flex-col items-center cursor-pointer hover:opacity-80 transition-opacity ${
+              currentScreen === "dashboard" ? "opacity-100" : "opacity-60"
+            }`}
+            onClick={() => setCurrentScreen("dashboard")}
+          >
+            <div className="relative">
+              <Package className={`h-6 w-6 ${currentScreen === "dashboard" ? "text-blue-600" : "text-gray-600"}`} />
+              {notifications > 0 && (
+                <Badge className="absolute -top-2 -right-2 h-5 w-5 rounded-full p-0 flex items-center justify-center text-xs">
+                  {notifications}
+                </Badge>
+              )}
+            </div>
+            <span className={`text-xs mt-1 ${currentScreen === "dashboard" ? "text-blue-600 font-medium" : "text-gray-600"}`}>Dashboard</span>
+          </div>
+          <div 
+            className="flex flex-col items-center cursor-pointer hover:opacity-80 transition-opacity"
+            onClick={() => navigate('/faturamento')}
+          >
+            <DollarSign className="h-6 w-6 text-green-600" />
+            <span className="text-xs text-gray-600 mt-1">{formatCurrency(faturamento)}</span>
+          </div>
+          <div 
+            className="flex flex-col items-center cursor-pointer hover:opacity-80 transition-opacity"
+            onClick={() => navigate('/recebimentos')}
+          >
+            <div className="relative">
+              <Truck className="h-6 w-6 text-orange-600" />
+              {activeOrders > 0 && (
+                <Badge className="absolute -top-2 -right-2 h-5 w-5 rounded-full p-0 flex items-center justify-center text-xs bg-orange-500">
+                  {activeOrders}
+                </Badge>
+              )}
+            </div>
+            <span className="text-xs text-gray-600 mt-1">Recebimentos</span>
+          </div>
+          <div 
+            className={`flex flex-col items-center cursor-pointer hover:opacity-80 transition-opacity ${
+              currentScreen === "profile" ? "opacity-100" : "opacity-60"
+            }`}
+            onClick={() => setCurrentScreen("profile")}
+          >
+            <User className={`h-6 w-6 ${currentScreen === "profile" ? "text-blue-600" : "text-blue-600"}`} />
+            <span className={`text-xs mt-1 ${currentScreen === "profile" ? "text-blue-600 font-medium" : "text-gray-600"}`}>Perfil</span>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   // Sempre que mudar, salva no localStorage
   useEffect(() => {
     localStorage.setItem('isAvailable', JSON.stringify(isAvailable));
   }, [isAvailable]);
 
-  // 1. Trocar busca de pedidos disponíveis para buscar ofertas do entregador
+  // Buscar ofertas do entregador
   useEffect(() => {
     const fetchOffers = async () => {
       setLoading(true);
@@ -151,18 +359,16 @@ const Index = () => {
     };
   }, []);
 
-  // Sempre que pendingOrders mudar, inicia/atualiza timers locais de 10s
+  // Timers para ofertas
   useEffect(() => {
     const newCountdowns: { [offerId: number]: number } = {};
     pendingOrders.forEach((offer) => {
       if (!(offer.offer_id in offerTimers.current)) {
-        // Inicia timer de 10s para cada nova oferta
         offerTimers.current[offer.offer_id] = window.setInterval(() => {
           setOfferCountdowns((prev) => {
             const next = { ...prev };
             next[offer.offer_id] = (next[offer.offer_id] || 10) - 1;
             if (next[offer.offer_id] <= 0) {
-              // Remove oferta da tela
               setPendingOrders((orders) => orders.filter((o) => o.offer_id !== offer.offer_id));
               clearInterval(offerTimers.current[offer.offer_id]);
               delete offerTimers.current[offer.offer_id];
@@ -173,19 +379,17 @@ const Index = () => {
         }, 1000);
         newCountdowns[offer.offer_id] = 10;
       } else {
-        // Mantém o countdown atual
         newCountdowns[offer.offer_id] = offerCountdowns[offer.offer_id] || 10;
       }
     });
     setOfferCountdowns(newCountdowns);
-    // Limpa timers de ofertas que sumiram
+    
     Object.keys(offerTimers.current).forEach((id) => {
       if (!pendingOrders.find((o) => o.offer_id === Number(id))) {
         clearInterval(offerTimers.current[Number(id)]);
         delete offerTimers.current[Number(id)];
       }
     });
-    // eslint-disable-next-line
   }, [pendingOrders]);
 
   // Inicializa o elemento de áudio
@@ -200,278 +404,153 @@ const Index = () => {
     };
   }, []);
 
-  // Toca o som sempre que uma nova oferta aparecer
+  // Buscar dados iniciais
   useEffect(() => {
-    if (pendingOrders.length > 0) {
-      if (audioRef.current) {
-        audioRef.current.loop = true;
-        audioRef.current.currentTime = 0;
-        audioRef.current.play().catch(() => {});
-      }
-    } else {
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current.currentTime = 0;
-      }
-    }
-  }, [pendingOrders.length]);
-
-  // Buscar pedidos em andamento
-  const fetchActiveOrders = async () => {
-    try {
-      const response = await api.get('/orders/active');
-      // Filtrar apenas pedidos atribuídos ao entregador logado
-      const filteredOrders = response.data.filter((order: any) => {
-        const isAssignedToUser = Number(order.delivery_id) === user?.id;
-        return isAssignedToUser;
-      });
-      setActiveOrders(filteredOrders);
-    } catch (err) {
-      setActiveOrders([]);
-    }
-  };
-
-  // Buscar pedidos em andamento
-  useEffect(() => {
-    if (isAvailable && user?.id) {
-      fetchActiveOrders();
-    } else {
-      setActiveOrders([]);
-    }
-  }, [isAvailable, pendingOrders, user?.id]);
-
-  // Buscar perfil do entregador ao carregar
-  useEffect(() => {
-    const fetchProfile = async () => {
+    const fetchData = async () => {
       try {
-        const data = await fetchDeliveryProfile();
-        setDeliveryPerson(data);
+        await Promise.all([
+          fetchActiveOrders(),
+          fetchProfile(),
+          fetchHistory(),
+          fetchTodayFaturamento(),
+          fetchFaturamento(),
+          fetchUnreadCount()
+        ]);
       } catch (err) {
-        setDeliveryPerson(null);
+        console.error('Erro ao buscar dados iniciais:', err);
       }
     };
-    fetchProfile();
-    fetchTodayFaturamento();
-    fetchUnreadCount();
-  }, [fetchUnreadCount]);
 
-  // Buscar histórico de entregas ao abrir a tela de histórico
-  useEffect(() => {
-    if (currentScreen === "history") {
-      const fetchHistory = async () => {
-        try {
-          const response = await api.get('/orders/history');
-          setHistory(response.data);
-        } catch (err) {
-          setHistory([]);
-        }
-      };
-      fetchHistory();
-    }
-  }, [currentScreen]);
-
-  useEffect(() => {
-    setForm({
-      name: deliveryPerson?.name || "",
-      email: deliveryPerson?.email || "",
-      cpf: deliveryPerson?.cpf || "",
-      phone: deliveryPerson?.phone || "",
-      vehicle_type: deliveryPerson?.vehicle_type || "",
-      vehicle_model: deliveryPerson?.vehicle_model || "",
-      has_plate: deliveryPerson?.has_plate || false,
-      plate: deliveryPerson?.plate || "",
-      photo_url: deliveryPerson?.photo_url || "",
-    });
-  }, [deliveryPerson]);
-
-
-
-  const fetchTodayFaturamento = async () => {
-    try {
-      const response = await api.get('/orders/history');
-      const allOrders = response.data;
-
-      // Filtrar apenas pedidos de hoje
-      const today = new Date();
-      const todayOrders = allOrders.filter((order: any) => {
-        const orderDate = new Date(order.date);
-        return (
-          orderDate.getDate() === today.getDate() &&
-          orderDate.getMonth() === today.getMonth() &&
-          orderDate.getFullYear() === today.getFullYear()
-        );
-      });
-
-      // Calcular total de taxas de entrega do dia
-      const totalFees = todayOrders.reduce((sum: number, order: any) => sum + (order.earning || 0), 0);
-      setTodayFaturamento(totalFees);
-    } catch (error) {
-      console.error('Erro ao buscar faturamento:', error);
-    }
-  };
-
-  // Buscar faturamento do dia e da semana
-  const fetchFaturamento = async () => {
-    try {
-      const response = await api.get('/delivery-history');
-      const allOrders = response.data;
-      const today = new Date();
-      const startOfWeek = new Date(today);
-      startOfWeek.setDate(today.getDate() - today.getDay());
-      startOfWeek.setHours(0, 0, 0, 0);
-      const endOfWeek = new Date(startOfWeek);
-      endOfWeek.setDate(startOfWeek.getDate() + 6);
-      endOfWeek.setHours(23, 59, 59, 999);
-
-      // Faturamento do dia
-      const todayOrders = allOrders.filter((order: any) => {
-        if (!order.finished_at) return false;
-        const orderDate = new Date(order.finished_at);
-        return (
-          !isNaN(orderDate.getTime()) &&
-          orderDate.getDate() === today.getDate() &&
-          orderDate.getMonth() === today.getMonth() &&
-          orderDate.getFullYear() === today.getFullYear()
-        );
-      });
-      const totalToday = todayOrders.reduce((sum: number, order: any) => sum + (order.delivery_fee || 0), 0);
-      setTodayFaturamento(totalToday);
-
-      // Faturamento da semana
-      const weekOrders = allOrders.filter((order: any) => {
-        if (!order.finished_at) return false;
-        const orderDate = new Date(order.finished_at);
-        return !isNaN(orderDate.getTime()) && orderDate >= startOfWeek && orderDate <= endOfWeek;
-      });
-      const totalWeek = weekOrders.reduce((sum: number, order: any) => sum + (order.delivery_fee || 0), 0);
-      setWeekFaturamento(totalWeek);
-    } catch (error) {
-      console.error('Erro ao buscar faturamento:', error);
-    }
-  };
-
-  useEffect(() => {
-    fetchFaturamento();
+    fetchData();
   }, []);
 
 
-  // Função para checar se o perfil está completo
-  function isProfileComplete(formData = form) {
-    return !!(
-      formData.name &&
-      formData.email &&
-      formData.cpf &&
-      formData.phone &&
-      formData.vehicle_type &&
-      (formData.vehicle_type === 'bicicleta' || formData.vehicle_model) &&
-      (!formData.has_plate || (formData.has_plate && formData.plate))
-    );
-  }
 
-  // Função para listar campos faltantes
-  function getCamposFaltando(form: any) {
-    const faltando = [];
-    if (!form.name) faltando.push('Nome');
-    if (!form.email) faltando.push('E-mail');
-    if (!form.cpf) faltando.push('CPF');
-    if (!form.phone) faltando.push('Telefone');
-    if (!form.vehicle_type) faltando.push('Tipo de veículo');
-    if (form.vehicle_type !== 'bicicleta' && !form.vehicle_model) faltando.push('Modelo do veículo');
-    if (form.has_plate && !form.plate) faltando.push('Placa do veículo');
-    return faltando;
-  }
+  const LoginScreen = () => {
+    const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
+    const [loading, setLoading] = useState(false);
+    const { login } = useAuth();
 
-  // 2. Atualizar refreshOrders para buscar ofertas
-  const refreshOrders = async () => {
-    if (!isAvailable) return;
-    setLoading(true);
-    try {
-      const response = await api.get('/order-offers');
-      setPendingOrders(response.data);
-      toast.success('Ofertas atualizadas!', { duration: 2000 });
-    } catch (err) {
-      setPendingOrders([]);
-      toast.error('Erro ao atualizar ofertas', { duration: 2000 });
-    } finally {
-      setLoading(false);
-    }
-  };
+    const handleLogin = async (e: React.FormEvent) => {
+      e.preventDefault();
+      setLoading(true);
+      
+      try {
+        await login(email, password);
+        toast.success('Login realizado com sucesso!');
+      } catch (error: any) {
+        console.error('Erro no login:', error);
+        toast.error(error.response?.data?.message || 'Erro ao fazer login');
+      } finally {
+        setLoading(false);
+      }
+    };
 
-  // Modificar o handler do Switch de disponibilidade
-  const handleAvailabilityChange = (checked: boolean) => {
-    if (checked && !isProfileComplete()) {
-      setShowProfileAlert(true);
-      return;
-    }
-    setIsAvailable(checked);
-  };
-
-  // Tela de Login
-  const LoginScreen = () => (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-blue-100">
-      <Card className="w-full max-w-md">
-        <CardHeader className="text-center">
-          <CardTitle className="text-2xl font-bold text-blue-600">
-            QuickEntregadores
-          </CardTitle>
-          <p className="text-muted-foreground">Entre na sua conta</p>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="email">Email</Label>
-            <Input id="email" type="email" placeholder="seu@email.com" />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="password">Senha</Label>
-            <Input id="password" type="password" placeholder="********" />
-          </div>
-          <Button 
-            className="w-full" 
-            onClick={() => navigate('/login')}
-          >
-            Entrar
-          </Button>
-        </CardContent>
-      </Card>
-    </div>
-  );
-
-  // Dashboard Principal
-  const Dashboard = () => {
-    console.log('activeOrders:', activeOrders);
-    console.log('photo_url dashboard:', deliveryPerson?.photo_url);
     return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <div className="bg-white shadow-sm border-b">
-        <div className="flex items-center justify-between p-4">
-          <div className="flex items-center space-x-3">
-              <Avatar onClick={() => setCurrentScreen("profile")}
-                className="cursor-pointer hover:opacity-80 transition">
-                <AvatarImage src={deliveryPerson?.photo_url ? deliveryPerson.photo_url.replace('uc?id=', 'uc?export=view&id=') : "/placeholder.svg"} />
-                <AvatarFallback>{deliveryPerson?.name?.[0] || "DR"}</AvatarFallback>
-            </Avatar>
-            <div>
-                <h2 className="font-semibold">{deliveryPerson?.name || "Entregador"}</h2>
-              <div className="flex items-center space-x-1 text-sm text-muted-foreground">
-                <Star className="h-4 w-4 fill-yellow-400 text-yellow-400" />
-                  <span>{deliveryPerson?.rating !== undefined ? deliveryPerson.rating : "-"}</span>
-                <span>•</span>
-                  <span>{deliveryPerson?.totalDeliveries !== undefined ? `${deliveryPerson.totalDeliveries} entregas` : "- entregas"}</span>
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-green-50 flex items-center justify-center p-4">
+        <div className="w-full max-w-md">
+          <div className="text-center mb-8">
+            <div className="w-20 h-20 bg-gradient-to-br from-blue-500 to-green-600 rounded-full flex items-center justify-center mx-auto mb-4">
+              <Truck className="h-10 w-10 text-white" />
+            </div>
+            <h1 className="text-2xl font-bold text-gray-800 mb-2">Quick Entregadores</h1>
+            <p className="text-gray-600">Faça login para começar a trabalhar</p>
+          </div>
+          
+          <Card className="shadow-xl border-0 bg-white/80 backdrop-blur-sm">
+            <CardContent className="p-8">
+              <form onSubmit={handleLogin} className="space-y-4">
+                <div>
+                  <Label htmlFor="email" className="text-sm font-medium text-gray-700">Email</Label>
+                  <Input
+                    id="email"
+                    type="email"
+                    placeholder="seu@email.com"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="mt-1"
+                    required
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="password" className="text-sm font-medium text-gray-700">Senha</Label>
+                  <Input
+                    id="password"
+                    type="password"
+                    placeholder="••••••••"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="mt-1"
+                    required
+                  />
+                </div>
+                <Button 
+                  type="submit"
+                  className="w-full bg-gradient-to-r from-blue-600 to-green-600 hover:from-blue-700 hover:to-green-700 text-white font-semibold py-3"
+                  disabled={loading}
+                >
+                  {loading ? 'Entrando...' : 'Entrar'}
+                </Button>
+              </form>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  };
+
+  // Dashboard Moderno
+  const Dashboard = () => {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-green-50">
+        {/* Header Moderno */}
+        <div className="bg-white/80 backdrop-blur-md shadow-lg border-b border-gray-100">
+          <div className="flex items-center justify-between p-6">
+            <div className="flex items-center space-x-4">
+              <Avatar 
+                onClick={() => setCurrentScreen("profile")}
+                className="cursor-pointer hover:opacity-80 transition-all duration-300 hover:scale-105 ring-2 ring-blue-100 hover:ring-blue-300"
+                style={{ width: '60px', height: '60px' }}
+              >
+                <AvatarImage 
+                  src={deliveryPerson?.photo_url ? deliveryPerson.photo_url.replace('uc?id=', 'uc?export=view&id=') : "/placeholder.svg"} 
+                />
+                <AvatarFallback className="text-lg font-semibold bg-gradient-to-br from-blue-500 to-purple-600 text-white">
+                  {deliveryPerson?.name?.[0] || "DR"}
+                </AvatarFallback>
+              </Avatar>
+              <div>
+                <h2 className="text-xl font-bold text-gray-800">{deliveryPerson?.name || "Entregador"}</h2>
+                <div className="flex items-center space-x-2 text-sm text-gray-600">
+                  <div className="flex items-center space-x-1">
+                    <Star className="h-4 w-4 fill-yellow-400 text-yellow-400" />
+                    <span className="font-medium">{deliveryPerson?.rating !== undefined ? deliveryPerson.rating : "0"}</span>
+                  </div>
+                  <span className="text-gray-400">•</span>
+                  <span className="font-medium">{deliveryPerson?.totalDeliveries !== undefined ? `${deliveryPerson.totalDeliveries} entregas` : "0 entregas"}</span>
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center space-x-4">
+              <div className="text-right">
+                <span className={`text-sm font-medium ${isAvailable ? 'text-green-600' : 'text-gray-500'}`}>
+                  {isAvailable ? "Disponível" : "Indisponível"}
+                </span>
+                <div className="text-xs text-gray-400">
+                  {isAvailable ? "Recebendo pedidos" : "Modo offline"}
+                </div>
+              </div>
+              <div className="flex items-center space-x-2">
+                <Switch 
+                  checked={isAvailable} 
+                  onCheckedChange={handleAvailabilityChange}
+                  className="data-[state=checked]:bg-green-500"
+                />
               </div>
             </div>
           </div>
-          <div className="flex items-center space-x-3">
-            <span className="text-sm">
-              {isAvailable ? "Disponível" : "Indisponível"}
-            </span>
-            <Switch 
-              checked={isAvailable} 
-                onCheckedChange={handleAvailabilityChange}
-            />
-          </div>
         </div>
-      </div>
 
         <AlertDialog open={showProfileAlert} onOpenChange={setShowProfileAlert}>
           <AlertDialogContent>
@@ -501,1047 +580,573 @@ const Index = () => {
           </AlertDialogContent>
         </AlertDialog>
 
-      {/* Ganhos */}
-      <div className="p-4">
-        <div className="grid grid-cols-2 gap-4 mb-6">
-          <Card>
-            <CardContent className="p-4">
-              <div className="flex items-center space-x-2">
-                <DollarSign className="h-5 w-5 text-green-600" />
-                <div>
-                  <p className="text-sm text-muted-foreground">Hoje</p>
-                  <p className="text-xl font-semibold">R$ {Number(todayFaturamento || 0).toFixed(2)}</p>
-                </div>
+        {/* Seção de Ganhos Moderna */}
+        {isAvailable ? (
+          <>
+            <div className="mb-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-bold text-gray-800 flex items-center">
+                  <Package className="h-5 w-5 mr-2 text-orange-600" />
+                  Pedidos Disponíveis
+                </h3>
+                <Button 
+                  variant="outline" 
+                  size="sm"
+                  onClick={refreshOrders}
+                  disabled={loading}
+                  className="hover:bg-orange-50 hover:border-orange-200 transition-colors"
+                >
+                  <RefreshCw className={`h-4 w-4 mr-1 ${loading ? 'animate-spin' : ''}`} />
+                  {loading ? 'Atualizando...' : 'Atualizar'}
+                </Button>
               </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="p-4">
-              <div className="flex items-center space-x-2">
-                <DollarSign className="h-5 w-5 text-blue-600" />
-                <div>
-                  <p className="text-sm text-muted-foreground">Esta semana</p>
-                  <p className="text-xl font-semibold">R$ {Number(weekFaturamento || 0).toFixed(2)}</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Pedidos Pendentes */}
-          {isAvailable ? (
-            <>
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold flex items-center">
-                <Package className="h-5 w-5 mr-2" />
-                Pedidos Disponíveis
-              </h3>
-              <Button 
-                variant="outline" 
-                size="sm"
-                onClick={refreshOrders}
-                disabled={loading}
-              >
-                <RefreshCw className={`h-4 w-4 mr-1 ${loading ? 'animate-spin' : ''}`} />
-                {loading ? 'Atualizando...' : 'Atualizar'}
-              </Button>
-            </div>
+              
               {loading ? (
-                <div>Carregando pedidos...</div>
+                <div className="flex items-center justify-center py-12">
+                  <div className="flex items-center space-x-2 text-gray-500">
+                    <RefreshCw className="h-5 w-5 animate-spin" />
+                    <span>Carregando pedidos...</span>
+                  </div>
+                </div>
               ) : pendingOrders.length === 0 ? (
-                <div>Nenhum pedido disponível no momento.</div>
+                <div className="text-center py-12">
+                  <Package className="h-12 w-12 text-gray-300 mx-auto mb-4" />
+                  <h4 className="text-lg font-medium text-gray-600 mb-2">Nenhum pedido disponível</h4>
+                  <p className="text-gray-500">Aguarde novos pedidos chegarem...</p>
+                </div>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {pendingOrders.map((offer) => {
-                const secondsLeft = offerCountdowns[offer.offer_id] ?? 10;
-                if (secondsLeft <= 0) return null;
-                // Barra de progresso baseada no tempo restante (10s)
-                const progressPercent = Math.max(0, (secondsLeft / 10) * 100);
-                let progressColor = 'bg-green-500';
-                if (secondsLeft <= 2) progressColor = 'bg-red-500';
-                else if (secondsLeft <= 5) progressColor = 'bg-orange-500';
-                return (
-                  <Card key={offer.offer_id} className="border-green-500">
-                    <CardContent className="p-4">
-                      <div className="flex justify-between items-center mb-2">
-                        <span className="font-semibold text-lg">Pedido #{offer.pedido_id}</span>
-                        <Badge variant="secondary">Disponível</Badge>
-                      </div>
-                      <div className="mb-2">
-                        <strong>Cliente:</strong> {offer.cliente}<br />
-                        <strong>Telefone:</strong> {offer.telefone}<br />
-                        <strong>Endereço:</strong> {offer.endereco}<br />
-                        <strong>Estabelecimento:</strong> {offer.estabelecimento}<br />
-                        <strong>Data:</strong> {offer.order_created_at ? new Date(offer.order_created_at).toLocaleString() : '-'}
-                      </div>
-                      {/* Barra de progresso do tempo */}
-                      <div className="w-full bg-gray-200 rounded-full h-2 mb-2 overflow-hidden">
-                        <div
-                          className={`h-2 transition-all duration-1000 ${progressColor}`}
-                          style={{ width: `${progressPercent}%` }}
-                        />
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Button
-                          size="sm"
-                          className="w-full mt-2"
-                          onClick={() => handleAcceptOffer(offer.offer_id)}
-                        >
-                          Aceitar Entrega
-                        </Button>
-                        <span className="text-sm text-gray-500 font-mono w-12 text-center">
-                          {secondsLeft}s
-                        </span>
-                      </div>
-                    </CardContent>
-                  </Card>
-                );
-              })}
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {pendingOrders.map((offer) => {
+                    const secondsLeft = offerCountdowns[offer.offer_id] ?? 10;
+                    if (secondsLeft <= 0) return null;
+                    
+                    const progressPercent = Math.max(0, (secondsLeft / 10) * 100);
+                    let progressColor = 'bg-green-500';
+                    let urgencyText = 'Tempo normal';
+                    
+                    if (secondsLeft <= 2) {
+                      progressColor = 'bg-red-500';
+                      urgencyText = 'Última chance!';
+                    } else if (secondsLeft <= 5) {
+                      progressColor = 'bg-orange-500';
+                      urgencyText = 'Apressado!';
+                    }
+                    
+                    return (
+                      <Card 
+                        key={offer.offer_id} 
+                        className="border-2 border-orange-200 hover:border-orange-300 hover:shadow-xl transition-all duration-300 hover:scale-105 bg-gradient-to-br from-orange-50 to-yellow-50"
+                      >
+                        <CardContent className="p-6">
+                          <div className="flex justify-between items-start mb-4">
+                            <div>
+                              <span className="font-bold text-xl text-orange-800">#{offer.pedido_id}</span>
+                              <Badge className="ml-2 bg-orange-100 text-orange-800 border-orange-200">
+                                Disponível
+                              </Badge>
+                            </div>
+                            <div className="text-right">
+                              <div className="text-sm font-medium text-gray-600">Cliente</div>
+                              <div className="font-semibold text-gray-800">{offer.cliente}</div>
+                            </div>
+                          </div>
+                          
+                          <div className="space-y-3 mb-4">
+                            <div className="flex items-center space-x-2">
+                              <Phone className="h-4 w-4 text-gray-500" />
+                              <span className="text-sm text-gray-600">{offer.telefone}</span>
+                            </div>
+                            <div className="flex items-start space-x-2">
+                              <MapPin className="h-4 w-4 text-gray-500 mt-0.5" />
+                              <span className="text-sm text-gray-600">{offer.endereco}</span>
+                            </div>
+                            <div className="flex items-center space-x-2">
+                              <Package className="h-4 w-4 text-gray-500" />
+                              <span className="text-sm text-gray-600">{offer.estabelecimento}</span>
+                            </div>
+                          </div>
+                          
+                          {/* Barra de progresso moderna */}
+                          <div className="mb-4">
+                            <div className="flex justify-between items-center mb-2">
+                              <span className="text-xs font-medium text-gray-600">Tempo restante</span>
+                              <span className={`text-xs font-bold ${
+                                secondsLeft <= 2 ? 'text-red-600' : 
+                                secondsLeft <= 5 ? 'text-orange-600' : 'text-green-600'
+                              }`}>
+                                {urgencyText}
+                              </span>
+                            </div>
+                            <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
+                              <div
+                                className={`h-3 transition-all duration-1000 ease-out ${progressColor} rounded-full`}
+                                style={{ width: `${progressPercent}%` }}
+                              />
+                            </div>
+                            <div className="flex justify-between items-center mt-2">
+                              <span className="text-xs text-gray-500">0s</span>
+                              <span className="text-sm font-mono font-bold text-gray-700">
+                                {secondsLeft}s
+                              </span>
+                              <span className="text-xs text-gray-500">10s</span>
+                            </div>
+                          </div>
+                          
+                          <Button
+                            size="lg"
+                            className="w-full bg-orange-600 hover:bg-orange-700 text-white font-semibold transition-all duration-300 hover:scale-105"
+                            onClick={() => handleAcceptOffer(offer.offer_id)}
+                          >
+                            Aceitar Entrega
+                          </Button>
+                        </CardContent>
+                      </Card>
+                    );
+                  })}
                 </div>
               )}
-            </>
-          ) : (
-            <div className="flex flex-col items-center justify-center h-64 text-muted-foreground">
-              <span className="text-2xl mb-2">Você está indisponível</span>
-              <span>Ative sua disponibilidade para receber pedidos</span>
             </div>
-          )}
+            {/* Pedidos em Andamento */}
+            {isAvailable && activeOrders.length > 0 && (
+              <div className="mb-8">
+                <h3 className="text-lg font-semibold mb-4 flex items-center">
+                  <Package className="h-5 w-5 mr-2" />
+                  Pedidos em Andamento
+                </h3>
+                <div className="space-y-3">
+                  {activeOrders.map((order) => (
+                    <Card
+                      key={order.id}
+                      className="border-green-500 cursor-pointer hover:shadow-lg transition"
+                      onClick={async () => {
+                        try {
+                          const response = await api.get(`/orders/${order.id}`);
+                          setSelectedOrder(response.data);
+                          setCurrentScreen("orderDetails");
+                        } catch (err) {
+                          toast.error("Erro ao buscar detalhes do pedido");
+                        }
+                      }}
+                    >
+                      <CardContent className="p-4">
+                        <div className="flex justify-between items-start mb-3">
+                          <div>
+                            <h4 className="font-semibold">{order.establishment_name}</h4>
+                            <p className="text-sm text-muted-foreground">{order.endereco}</p>
+                          </div>
+                          <Badge variant="secondary">Cliente: {order.customer_name}</Badge>
+                        </div>
+                        <div className="flex items-center text-sm text-muted-foreground mb-3">
+                          <MapPin className="h-4 w-4 mr-1" />
+                          <span>{order.endereco}</span>
+                          <Clock className="h-4 w-4 ml-3 mr-1" />
+                          <span>{order.created_at ? new Date(order.created_at).toLocaleString() : '-'}</span>
+                        </div>
+                        <div className="flex flex-wrap gap-2 mb-2">
+                          <Badge className="bg-blue-100 text-blue-800 font-semibold text-base shadow">
+                            {order.payment_method === 'CASH' ? 'Dinheiro' : order.payment_method === 'CREDIT' ? 'Cartão de Crédito' : order.payment_method === 'DEBIT' ? 'Cartão de Débito' : order.payment_method === 'PIX' ? 'PIX' : order.payment_method}
+                          </Badge>
+                          {order.change_amount !== undefined && order.change_amount !== null && Number(order.change_amount) > 0 && (
+                            <Badge className="bg-green-100 text-green-800 font-semibold text-base shadow">
+                              Troco: R$ {Number(order.change_amount).toFixed(2).replace('.', ',')}
+                            </Badge>
+                          )}
+                        </div>
+                        <div className="flex justify-between items-center">
+                          <span className="text-sm">Telefone: {order.customer_phone}</span>
+                          <Button 
+                            size="sm"
+                            className="ml-4"
+                            onClick={e => {
+                              e.stopPropagation();
+                              handleFinishOrder(order.id);
+                            }}
+                          >
+                            Finalizar Entrega
+                          </Button>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              </div>
+            )}
 
-          {/* Pedidos em Andamento */}
-          {isAvailable && activeOrders.length > 0 && (
-            <div className="mb-8">
-              <h3 className="text-lg font-semibold mb-4 flex items-center">
-                <Package className="h-5 w-5 mr-2" />
-                Pedidos em Andamento
-              </h3>
-              <div className="space-y-3">
-                {activeOrders.map((order) => (
-                  <Card
-                    key={order.id}
-                    className="border-green-500 cursor-pointer hover:shadow-lg transition"
-                    onClick={async () => {
-                      try {
-                        const response = await api.get(`/orders/${order.id}`);
-                        setSelectedOrder(response.data);
-                        setCurrentScreen("orderDetails");
-                      } catch (err) {
-                        toast.error("Erro ao buscar detalhes do pedido");
-                      }
-                    }}
-                  >
-                  <CardContent className="p-4">
-                    <div className="flex justify-between items-start mb-3">
-                      <div>
-                          <h4 className="font-semibold">{order.establishment_name}</h4>
-                          <p className="text-sm text-muted-foreground">{order.endereco}</p>
-                      </div>
-                        <Badge variant="secondary">Cliente: {order.customer_name}</Badge>
-                    </div>
-                    <div className="flex items-center text-sm text-muted-foreground mb-3">
-                      <MapPin className="h-4 w-4 mr-1" />
-                        <span>{order.endereco}</span>
-                      <Clock className="h-4 w-4 ml-3 mr-1" />
-                        <span>{order.created_at ? new Date(order.created_at).toLocaleString() : '-'}</span>
-                      </div>
-                      <div className="flex flex-wrap gap-2 mb-2">
-                        <Badge className="bg-blue-100 text-blue-800 font-semibold text-base shadow">{order.payment_method === 'CASH' ? 'Dinheiro' : order.payment_method === 'CREDIT' ? 'Cartão de Crédito' : order.payment_method === 'DEBIT' ? 'Cartão de Débito' : order.payment_method === 'PIX' ? 'PIX' : order.payment_method}</Badge>
-                        {order.change_amount !== undefined && order.change_amount !== null && Number(order.change_amount) > 0 && (
-                          <Badge className="bg-green-100 text-green-800 font-semibold text-base shadow">Troco: R$ {Number(order.change_amount).toFixed(2).replace('.', ',')}</Badge>
-                        )}
-                    </div>
-                    <div className="flex justify-between items-center">
-                        <span className="text-sm">Telefone: {order.customer_phone}</span>
-                      <Button 
-                        size="sm"
-                          className="ml-4"
-                          onClick={e => {
-                            e.stopPropagation(); // Para não abrir detalhes ao finalizar entrega
-                            handleFinishOrder(order.id);
-                        }}
-                      >
-                          Finalizar Entrega
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
+            {/* Botões de Navegação Modernos */}
+            <div className="mt-8 space-y-4 pb-24">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <Button 
+                  variant="outline" 
+                  className="w-full h-16 bg-gradient-to-r from-green-50 to-emerald-50 border-green-200 hover:border-green-300 hover:shadow-lg transition-all duration-300"
+                  onClick={() => navigate('/faturamento')}
+                >
+                  <div className="flex flex-col items-center space-y-1">
+                    <DollarSign className="h-6 w-6 text-green-600" />
+                    <span className="text-sm font-medium text-green-700">Faturamento</span>
+                  </div>
+                </Button>
+                
+                <Button 
+                  variant="outline" 
+                  className="w-full h-16 bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-200 hover:border-blue-300 hover:shadow-lg transition-all duration-300"
+                  onClick={() => navigate('/recebimentos')}
+                >
+                  <div className="flex flex-col items-center space-y-1">
+                    <CreditCard className="h-6 w-6 text-blue-600" />
+                    <span className="text-sm font-medium text-blue-700">Recebimentos</span>
+                  </div>
+                </Button>
+                
+                <Button 
+                  variant="outline" 
+                  className="w-full h-16 bg-gradient-to-r from-purple-50 to-pink-50 border-purple-200 hover:border-purple-300 hover:shadow-lg transition-all duration-300"
+                  onClick={() => setCurrentScreen("history")}
+                >
+                  <div className="flex flex-col items-center space-y-1">
+                    <History className="h-6 w-6 text-purple-600" />
+                    <span className="text-sm font-medium text-purple-700">Histórico</span>
+                  </div>
+                </Button>
+              </div>
             </div>
+          </>
+        ) : (
+          <div className="flex flex-col items-center justify-center py-16 text-center">
+            <div className="w-24 h-24 bg-gray-100 rounded-full flex items-center justify-center mb-6">
+              <Package className="h-12 w-12 text-gray-400" />
+            </div>
+            <h3 className="text-2xl font-bold text-gray-700 mb-2">Você está indisponível</h3>
+            <p className="text-gray-500 mb-6 max-w-md">
+              Ative sua disponibilidade para começar a receber pedidos e ganhar dinheiro
+            </p>
+            <Button 
+              onClick={() => handleAvailabilityChange(true)}
+              className="bg-green-600 hover:bg-green-700 text-white font-semibold"
+            >
+              Ficar Disponível
+            </Button>
           </div>
         )}
 
-        {/* Botão para Histórico */}
-        <div className="mt-6">
-          <Button 
-            variant="outline" 
-            className="w-full"
-            onClick={() => setCurrentScreen("history")}
-          >
-            <History className="h-4 w-4 mr-2" />
-            Ver Histórico de Entregas
-          </Button>
-        </div>
+        {/* Rodapé fixo */}
+        <FooterBar notifications={unreadNotifications} faturamento={todayFaturamento} activeOrders={activeOrders?.length || 0} currentScreen={currentScreen} />
       </div>
-      {/* Rodapé fixo apenas na home */}
-      <FooterBar notifications={unreadNotifications} faturamento={todayFaturamento} activeOrders={activeOrders?.length || 0} />
-    </div>
-  );
+    );
   };
 
-  // Remover o componente OrderDetails
-  // Ajustar para exibir detalhes do pedido aceito em modal ou expandido no card
-  const OrderDetails = () => (
-    <div className="min-h-screen bg-gray-50">
-      <div className="bg-white shadow-sm border-b p-4">
-        <div className="flex items-center space-x-3">
-          <Button 
-            variant="ghost" 
-            size="sm"
-            onClick={() => setCurrentScreen("dashboard")}
-          >
-            ← Voltar
-          </Button>
-          <h2 className="text-lg font-semibold">Detalhes do Pedido</h2>
-        </div>
-      </div>
-
-      <div className="p-4 space-y-4">
-        {/* Informações do Restaurante */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center">
-              <Package className="h-5 w-5 mr-2" />
-              {selectedOrder?.restaurant}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-3">
-              <div className="flex items-center text-muted-foreground">
-                <MapPin className="h-4 w-4 mr-2" />
-                {selectedOrder?.restaurantAddress}
-              </div>
-              <div className="flex items-center text-muted-foreground">
-                <Phone className="h-4 w-4 mr-2" />
-                (11) 99999-9999
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Mapa do Restaurante */}
-        <Card>
-          <CardContent className="p-4">
-            <div className="bg-gray-200 h-48 rounded-lg flex items-center justify-center">
-              <div className="text-center text-muted-foreground">
-                <MapPin className="h-8 w-8 mx-auto mb-2" />
-                <p>Mapa do Restaurante</p>
-                <p className="text-sm">Localização: {selectedOrder?.restaurantAddress}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Itens do Pedido */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Itens do Pedido</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2">
-              {selectedOrder?.items.map((item, index) => (
-                <div key={index} className="flex justify-between items-center py-2 border-b last:border-b-0">
-                  <span>{item}</span>
-                </div>
-              ))}
-            </div>
-            <div className="mt-4 pt-4 border-t">
-              <div className="flex justify-between items-center font-semibold">
-                <span>Total:</span>
-                <span>R$ {selectedOrder?.value ? Number(selectedOrder.value).toFixed(2) : '0,00'}</span>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Botões de Ação */}
-        <div className="space-y-3">
-          <Button 
-            className="w-full"
-            onClick={() => setCurrentScreen("collected")}
-          >
-            <Navigation className="h-4 w-4 mr-2" />
-            Ir para o Restaurante
-          </Button>
-        </div>
-      </div>
-    </div>
-  );
-
-  // Tela de Pedido Coletado
-  const CollectedScreen = () => (
-    <div className="min-h-screen bg-gray-50">
-      <div className="bg-white shadow-sm border-b p-4">
-        <h2 className="text-lg font-semibold text-center">Coletando Pedido</h2>
-      </div>
-
-      <div className="p-4 space-y-4">
-        <Card>
-          <CardContent className="p-6 text-center">
-            <Package className="h-16 w-16 text-blue-600 mx-auto mb-4" />
-            <h3 className="text-lg font-semibold mb-2">Chegou ao restaurante?</h3>
-            <p className="text-muted-foreground mb-6">
-              Confirme quando coletar o pedido #{selectedOrder?.id}
-            </p>
-            <Button 
-              className="w-full"
-              onClick={() => setCurrentScreen("delivery")}
-            >
-              <CheckCircle className="h-4 w-4 mr-2" />
-              Pedido Coletado
-            </Button>
-          </CardContent>
-        </Card>
-
-        {/* Info do Cliente */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Entregar para:</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-3">
-              <div>
-                <p className="font-semibold">{selectedOrder?.customerName}</p>
-                <p className="text-sm text-muted-foreground">{selectedOrder?.customerAddress}</p>
-              </div>
-              <div className="flex items-center text-muted-foreground">
-                <MapPin className="h-4 w-4 mr-2" />
-                <span>{selectedOrder?.distance} de distância</span>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-    </div>
-  );
-
-  // Tela de Entrega
-  const DeliveryScreen = () => (
-    <div className="min-h-screen bg-gray-50">
-      <div className="bg-white shadow-sm border-b p-4">
-        <h2 className="text-lg font-semibold text-center">Entregando Pedido</h2>
-      </div>
-
-      <div className="p-4 space-y-4">
-        {/* Mapa do Cliente */}
-        <Card>
-          <CardContent className="p-4">
-            <div className="bg-gray-200 h-48 rounded-lg flex items-center justify-center">
-              <div className="text-center text-muted-foreground">
-                <MapPin className="h-8 w-8 mx-auto mb-2" />
-                <p>Mapa do Cliente</p>
-                <p className="text-sm">Destino: {selectedOrder?.customerAddress}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Informações do Cliente */}
-        <Card>
-          <CardContent className="p-4">
-            <div className="space-y-3">
-              <div>
-                <h3 className="font-semibold">{selectedOrder?.customerName}</h3>
-                <p className="text-sm text-muted-foreground">{selectedOrder?.customerAddress}</p>
-              </div>
-              <div className="flex items-center space-x-4">
-                <Button variant="outline" size="sm">
-                  <Phone className="h-4 w-4 mr-2" />
-                  Ligar
-                </Button>
-                <Button variant="outline" size="sm">
-                  <Navigation className="h-4 w-4 mr-2" />
-                  Navegar
-                </Button>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Botão de Entrega */}
-        <Card>
-          <CardContent className="p-6 text-center">
-            <CheckCircle className="h-16 w-16 text-green-600 mx-auto mb-4" />
-            <h3 className="text-lg font-semibold mb-2">Chegou ao destino?</h3>
-            <p className="text-muted-foreground mb-6">
-              Confirme a entrega do pedido #{selectedOrder?.id}
-            </p>
-            <Button 
-              className="w-full bg-green-600 hover:bg-green-700"
-              onClick={async () => {
-                await handleFinishOrder(selectedOrder.id);
-                setCurrentScreen("dashboard");
-                setSelectedOrder(null);
-              }}
-            >
-              <CheckCircle className="h-4 w-4 mr-2" />
-              Pedido Entregue
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
-    </div>
-  );
-
-  // Funções utilitárias para filtro de datas
-  function isToday(dateString: string) {
-    const date = new Date(dateString);
-    const now = new Date();
-    return (
-      date.getDate() === now.getDate() &&
-      date.getMonth() === now.getMonth() &&
-      date.getFullYear() === now.getFullYear()
-    );
-  }
-
-  function isThisWeek(dateString: string) {
-    const date = new Date(dateString);
-    const now = new Date();
-    const firstDayOfWeek = new Date(now);
-    firstDayOfWeek.setDate(now.getDate() - now.getDay());
-    firstDayOfWeek.setHours(0, 0, 0, 0);
-    const lastDayOfWeek = new Date(firstDayOfWeek);
-    lastDayOfWeek.setDate(firstDayOfWeek.getDate() + 6);
-    lastDayOfWeek.setHours(23, 59, 59, 999);
-    return date >= firstDayOfWeek && date <= lastDayOfWeek;
-  }
-
-  function isThisMonth(dateString: string) {
-    const date = new Date(dateString);
-    const now = new Date();
-    return (
-      date.getMonth() === now.getMonth() &&
-      date.getFullYear() === now.getFullYear()
-    );
-  }
-
-  // Histórico de Entregas
-  const HistoryScreen = () => (
-    <div className="min-h-screen bg-gray-50">
-      <div className="bg-white shadow-sm border-b p-4">
-        <div className="flex items-center space-x-3">
-          <Button 
-            variant="ghost" 
-            size="sm"
-            onClick={() => setCurrentScreen("dashboard")}
-          >
-            ← Voltar
-          </Button>
-          <h2 className="text-lg font-semibold">Histórico de Entregas</h2>
-        </div>
-      </div>
-
-      <div className="p-4">
-        <Tabs defaultValue="today" className="w-full">
-          <TabsList className="grid w-full grid-cols-3">
-            <TabsTrigger value="today">Hoje</TabsTrigger>
-            <TabsTrigger value="week">Semana</TabsTrigger>
-            <TabsTrigger value="month">Mês</TabsTrigger>
-          </TabsList>
-          
-          <TabsContent value="today" className="space-y-4 mt-4">
-            {history.filter(delivery => isToday(delivery.date)).length === 0 ? (
-              <Card>
-                <CardContent className="p-6 text-center">
-                  <p className="text-muted-foreground">Nenhuma entrega realizada hoje.</p>
-                </CardContent>
-              </Card>
-            ) : (
-              history.filter(delivery => isToday(delivery.date)).map((delivery) => (
-              <Card key={delivery.id}>
-                <CardContent className="p-4">
-                  <div className="flex justify-between items-start mb-2">
-                    <div>
-                      <h4 className="font-semibold">{delivery.restaurant}</h4>
-                      <p className="text-sm text-muted-foreground">
-                        Para: {delivery.customer}
-                      </p>
-                    </div>
-                    <div className="text-right">
-                      <p className="font-semibold text-green-600">
-                          +R$ {Number(delivery.earning).toFixed(2)}
-                      </p>
-                      <div className="flex items-center">
-                        <Star className="h-4 w-4 fill-yellow-400 text-yellow-400 mr-1" />
-                        <span className="text-sm">{delivery.rating}</span>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="flex justify-between items-center text-sm text-muted-foreground">
-                      <span>Valor: R$ {Number(delivery.value).toFixed(2)}</span>
-                      <span>{delivery.date ? new Date(delivery.date).toLocaleDateString() : '-'}</span>
-                  </div>
-                </CardContent>
-              </Card>
-              ))
-            )}
-          </TabsContent>
-          
-          <TabsContent value="week" className="space-y-4 mt-4">
-            {history.filter(delivery => isThisWeek(delivery.date)).length === 0 ? (
-            <Card>
-              <CardContent className="p-6 text-center">
-                  <p className="text-muted-foreground">Nenhuma entrega realizada esta semana.</p>
-              </CardContent>
-            </Card>
-            ) : (
-              history.filter(delivery => isThisWeek(delivery.date)).map((delivery) => (
-                <Card key={delivery.id}>
-                  <CardContent className="p-4">
-                    <div className="flex justify-between items-start mb-2">
-                      <div>
-                        <h4 className="font-semibold">{delivery.restaurant}</h4>
-                        <p className="text-sm text-muted-foreground">
-                          Para: {delivery.customer}
-                        </p>
-                      </div>
-                      <div className="text-right">
-                        <p className="font-semibold text-green-600">
-                          +R$ {Number(delivery.earning).toFixed(2)}
-                        </p>
-                        <div className="flex items-center">
-                          <Star className="h-4 w-4 fill-yellow-400 text-yellow-400 mr-1" />
-                          <span className="text-sm">{delivery.rating}</span>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="flex justify-between items-center text-sm text-muted-foreground">
-                      <span>Valor: R$ {Number(delivery.value).toFixed(2)}</span>
-                      <span>{delivery.date ? new Date(delivery.date).toLocaleDateString() : '-'}</span>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))
-            )}
-          </TabsContent>
-          
-          <TabsContent value="month" className="space-y-4 mt-4">
-            {history.filter(delivery => isThisMonth(delivery.date)).length === 0 ? (
-            <Card>
-              <CardContent className="p-6 text-center">
-                  <p className="text-muted-foreground">Nenhuma entrega realizada este mês.</p>
-              </CardContent>
-            </Card>
-            ) : (
-              history.filter(delivery => isThisMonth(delivery.date)).map((delivery) => (
-                <Card key={delivery.id}>
-                  <CardContent className="p-4">
-                    <div className="flex justify-between items-start mb-2">
-                      <div>
-                        <h4 className="font-semibold">{delivery.restaurant}</h4>
-                        <p className="text-sm text-muted-foreground">
-                          Para: {delivery.customer}
-                        </p>
-                      </div>
-                      <div className="text-right">
-                        <p className="font-semibold text-green-600">
-                          +R$ {Number(delivery.earning).toFixed(2)}
-                        </p>
-                        <div className="flex items-center">
-                          <Star className="h-4 w-4 fill-yellow-400 text-yellow-400 mr-1" />
-                          <span className="text-sm">{delivery.rating}</span>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="flex justify-between items-center text-sm text-muted-foreground">
-                      <span>Valor: R$ {Number(delivery.value).toFixed(2)}</span>
-                      <span>{delivery.date ? new Date(delivery.date).toLocaleDateString() : '-'}</span>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))
-            )}
-          </TabsContent>
-        </Tabs>
-      </div>
-    </div>
-  );
-
-  // Tela de Perfil do Entregador
+  // Tela de Perfil
   const ProfileScreen = () => {
-    // Estado local do formulário para evitar re-renderizações
-    const [formState, setFormState] = useState({
-      name: "",
-      email: "",
-      cpf: "",
-      phone: "",
-      vehicle_type: "",
-      vehicle_model: "",
-      has_plate: false,
-      plate: "",
-      photo_url: "",
-    });
-
-    // Atualiza o estado local quando o perfil é carregado
-    useEffect(() => {
-      if (deliveryPerson) {
-        setFormState({
-          name: deliveryPerson.name || "",
-          email: deliveryPerson.email || "",
-          cpf: deliveryPerson.cpf || "",
-          phone: deliveryPerson.phone || "",
-          vehicle_type: deliveryPerson.vehicle_type || "",
-          vehicle_model: deliveryPerson.vehicle_model || "",
-          has_plate: deliveryPerson.has_plate || false,
-          plate: deliveryPerson.plate || "",
-          photo_url: deliveryPerson.photo_url || "",
-        });
-      }
-    }, [deliveryPerson]);
-
-    const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
-      e.preventDefault();
-      const { name, value, type } = e.target;
-      const checked = (e.target as HTMLInputElement).checked;
-
-      setFormState(prev => {
-        const newState = {
-          ...prev,
-          [name]: type === "checkbox" ? checked : value,
-        };
-
-        // Resetar campos relacionados quando mudar o tipo de veículo
-        if (name === 'vehicle_type') {
-          if (value === 'bicicleta') {
-            newState.vehicle_model = '';
-            newState.has_plate = false;
-            newState.plate = '';
-          } else {
-            newState.has_plate = false;
-            newState.plate = '';
-          }
-        }
-
-        return newState;
-      });
-    };
-
-    const handleSubmit = async (e: React.FormEvent) => {
-      e.preventDefault();
+    const handleSave = async () => {
       try {
-        const updated = await updateDeliveryProfile(formState);
-        // Garante que todos os campos obrigatórios estejam presentes
-        const safeProfile = {
-          name: updated?.name || formState.name,
-          email: updated?.email || formState.email,
-          cpf: updated?.cpf || formState.cpf,
-          phone: updated?.phone || formState.phone,
-          vehicle_type: updated?.vehicle_type || formState.vehicle_type,
-          vehicle_model: updated?.vehicle_model || formState.vehicle_model,
-          has_plate: updated?.has_plate ?? formState.has_plate,
-          plate: updated?.plate || formState.plate || '',
-          photo_url: updated?.photo_url || formState.photo_url || '',
-        };
-        setForm(safeProfile);
-        if (isProfileComplete(safeProfile)) setShowProfileAlert(false);
-        toast.success("Perfil atualizado com sucesso!");
+        await updateDeliveryProfile(form);
+        toast.success('Perfil atualizado com sucesso!');
         setEditMode(false);
+        fetchProfile();
       } catch (err) {
-        toast.error("Erro ao atualizar perfil");
-      }
-    };
-
-    const handlePhotoChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-      const formData = new FormData();
-      formData.append('photo', file);
-      try {
-        const token = localStorage.getItem('delivery_token');
-        const response = await fetch('/upload/profile-photo', {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-          body: formData,
-        });
-        const data = await response.json();
-        if (data.url) {
-          setFormState(prev => ({
-            ...prev,
-            photo_url: data.url || '',
-          }));
-          toast.success('Foto enviada com sucesso!');
-        } else {
-          toast.error('Erro ao enviar foto');
-        }
-      } catch (err) {
-        toast.error('Erro ao enviar foto');
+        toast.error('Erro ao atualizar perfil');
       }
     };
 
     return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-white flex flex-col items-center justify-center py-8 px-2">
-        <PWAStatus />
-        <div className="w-full max-w-md bg-white rounded-2xl shadow-xl p-6 relative">
-          <form onSubmit={handleSubmit}>
-            {/* Avatar */}
-            <div className="flex flex-col items-center -mt-16 mb-4">
-              <div className="rounded-full border-4 border-blue-400 shadow-lg p-1 bg-white">
-                <Avatar className="w-28 h-28">
-                  <AvatarImage src={formState.photo_url ? formState.photo_url.replace('uc?id=', 'uc?export=view&id=') : "/placeholder.svg"} />
-                  <AvatarFallback className="text-3xl">{formState.name?.[0] || "DR"}</AvatarFallback>
-                </Avatar>
-                
-              </div>
-              {editMode && (
-                <div className="w-full mt-2 flex flex-col gap-2">
-                  <label htmlFor="photo-upload" className="flex items-center gap-2 cursor-pointer bg-blue-100 hover:bg-blue-200 text-blue-700 px-4 py-2 rounded-lg shadow transition-colors w-fit">
-                    <Camera className="h-4 w-4" />
-                    <span>Escolher foto</span>
-                    <input
-                      id="photo-upload"
-                      type="file"
-                      accept="image/*"
-                      onChange={handlePhotoChange}
-                      className="hidden"
-                    />
-                  </label>
-                </div>
-              )}
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-green-50">
+        {/* Header */}
+        <div className="bg-white/80 backdrop-blur-md shadow-lg border-b border-gray-100">
+          <div className="flex items-center justify-between p-6">
+            <div className="flex items-center space-x-4">
+              <Button 
+                variant="ghost" 
+                onClick={() => setCurrentScreen("dashboard")}
+                className="p-2"
+              >
+                <Navigation className="h-5 w-5" />
+              </Button>
+              <h1 className="text-xl font-bold text-gray-800">Meu Perfil</h1>
             </div>
-
-            {/* Nome e Email */}
-            <div className="text-center mb-6">
-              <div className="flex items-center justify-center gap-2 mb-1">
-                <User className="h-5 w-5 text-blue-500" />
-                {editMode ? (
-                  <Input
-                    type="text"
-                    name="name"
-                    value={formState.name}
-                    onChange={handleChange}
-                    className="text-center"
-                  />
-                ) : (
-                  <span className="text-xl font-bold text-gray-800">{formState.name}</span>
-                )}
-              </div>
-              <div className="flex items-center justify-center gap-2">
-                <Mail className="h-4 w-4 text-gray-400" />
-                {editMode ? (
-                  <Input
-                    type="email"
-                    name="email"
-                    value={formState.email}
-                    onChange={handleChange}
-                    className="text-center"
-                  />
-                ) : (
-                  <span className="text-gray-500">{formState.email}</span>
-                )}
-              </div>
-            </div>
-
-            {/* Dados Pessoais */}
-            <div className="border-t pt-4 mt-4">
-              <div className="flex items-center gap-2 mb-2">
-                <IdCard className="h-4 w-4 text-blue-400" />
-                <span className="font-semibold text-gray-700">Dados Pessoais</span>
-              </div>
-              <div className="mb-2 flex items-center gap-2">
-                <KeyRound className="h-4 w-4 text-gray-400" />
-                <span className="font-semibold">CPF:</span>
-                {editMode ? (
-                  <Input
-                    type="text"
-                    name="cpf"
-                    value={formState.cpf}
-                    onChange={handleChange}
-                    className="w-full"
-                  />
-                ) : (
-                  <span>{formState.cpf || "-"}</span>
-                )}
-              </div>
-              <div className="mb-2 flex items-center gap-2">
-                <Phone className="h-4 w-4 text-gray-400" />
-                <span className="font-semibold">Telefone:</span>
-                {editMode ? (
-                  <Input
-                    type="tel"
-                    name="phone"
-                    value={formState.phone}
-                    onChange={handleChange}
-                    placeholder="(00) 00000-0000"
-                    className="w-full"
-                  />
-                ) : (
-                  <span>{formState.phone || "-"}</span>
-                )}
-              </div>
-            </div>
-
-            {/* Dados do Veículo */}
-            <div className="border-t pt-4 mt-4">
-              <div className="flex items-center gap-2 mb-2">
-                <Truck className="h-4 w-4 text-blue-400" />
-                <span className="font-semibold text-gray-700">Veículo</span>
-              </div>
-              <div className="mb-2 flex items-center gap-2">
-                {formState.vehicle_type === "carro" ? (
-                  <Car className="h-4 w-4 text-gray-400" />
-                ) : formState.vehicle_type === "moto" ? (
-                  <Bike className="h-4 w-4 text-gray-400 rotate-90" />
-                ) : (
-                  <Bike className="h-4 w-4 text-gray-400" />
-                )}
-                <span className="font-semibold">Tipo:</span>
-                {editMode ? (
-                  <select
-                    name="vehicle_type"
-                    value={formState.vehicle_type}
-                    onChange={handleChange}
-                    className="border rounded px-2 py-1 w-full"
-                  >
-                    <option value="">Selecione</option>
-                    <option value="moto">Moto</option>
-                    <option value="carro">Carro</option>
-                    <option value="bicicleta">Bicicleta</option>
-                  </select>
-                ) : (
-                  <span>{formState.vehicle_type || "-"}</span>
-                )}
-              </div>
-
-              {/* Modelo apenas para moto e carro */}
-              {editMode && formState.vehicle_type !== 'bicicleta' && (
-                <div className="mb-2 flex items-center gap-2">
-                  <Edit2 className="h-4 w-4 text-gray-400" />
-                  <span className="font-semibold">Modelo:</span>
-                  <Input
-                    type="text"
-                    name="vehicle_model"
-                    value={formState.vehicle_model}
-                    onChange={handleChange}
-                    className="w-full"
-                  />
-                </div>
-              )}
-
-              {/* Placa apenas para moto e carro */}
-              {editMode && formState.vehicle_type && formState.vehicle_type !== 'bicicleta' && (
-                <div className="mb-2 flex items-center gap-2">
-                  <KeyRound className="h-4 w-4 text-gray-400" />
-                  <span className="font-semibold">Placa:</span>
-                  <Input
-                    type="text"
-                    name="plate"
-                    value={formState.plate}
-                    onChange={handleChange}
-                    className="w-full"
-                    placeholder="ABC1234"
-                  />
-                </div>
-              )}
-            </div>
-
-            {/* Botões */}
-            <div className="flex flex-col gap-2 mt-6">
+            <div className="flex items-center space-x-2">
               {editMode ? (
                 <>
                   <Button 
-                    type="submit" 
-                    className="w-full rounded-full bg-blue-500 hover:bg-blue-600 text-white flex items-center justify-center gap-2"
-                  >
-                    <Save className="h-4 w-4" /> Salvar
-                  </Button>
-                  <Button 
-                    type="button"
-                    className="w-full rounded-full" 
                     variant="outline" 
-                    onClick={() => {
-                      setEditMode(false);
-                      setFormState({ // Restaura o estado original
-                        name: deliveryPerson?.name || "",
-                        email: deliveryPerson?.email || "",
-                        cpf: deliveryPerson?.cpf || "",
-                        phone: deliveryPerson?.phone || "",
-                        vehicle_type: deliveryPerson?.vehicle_type || "",
-                        vehicle_model: deliveryPerson?.vehicle_model || "",
-                        has_plate: deliveryPerson?.has_plate || false,
-                        plate: deliveryPerson?.plate || "",
-                        photo_url: deliveryPerson?.photo_url || "",
-                      });
-                    }}
+                    size="sm"
+                    onClick={() => setEditMode(false)}
                   >
                     Cancelar
+                  </Button>
+                  <Button 
+                    size="sm"
+                    onClick={handleSave}
+                  >
+                    Salvar
                   </Button>
                 </>
               ) : (
                 <Button 
-                  type="button"
-                  className="w-full rounded-full bg-blue-500 hover:bg-blue-600 text-white flex items-center justify-center gap-2" 
+                  variant="outline" 
+                  size="sm"
                   onClick={() => setEditMode(true)}
                 >
-                  <Edit2 className="h-4 w-4" /> Editar Perfil
+                  <Edit2 className="h-4 w-4 mr-2" />
+                  Editar
                 </Button>
               )}
-              <Button
-                type="button"
-                className="w-full rounded-full flex items-center justify-center gap-2"
-                variant="destructive"
-                onClick={logout}
-              >
-                <LogOut className="h-4 w-4" /> Sair
-              </Button>
             </div>
-          </form>
+          </div>
         </div>
+
+        {/* Conteúdo do Perfil */}
+        <div className="p-6 space-y-6 pb-24">
+          {/* Foto do Perfil */}
+          <div className="flex justify-center">
+            <div className="relative">
+              <Avatar 
+                className="w-24 h-24 ring-4 ring-white shadow-lg"
+              >
+                <AvatarImage 
+                  src={deliveryPerson?.photo_url ? deliveryPerson.photo_url.replace('uc?id=', 'uc?export=view&id=') : "/placeholder.svg"} 
+                />
+                <AvatarFallback className="text-2xl font-semibold bg-gradient-to-br from-blue-500 to-purple-600 text-white">
+                  {deliveryPerson?.name?.[0] || "DR"}
+                </AvatarFallback>
+              </Avatar>
+              {editMode && (
+                <Button 
+                  size="sm" 
+                  className="absolute -bottom-2 -right-2 rounded-full w-8 h-8 p-0"
+                >
+                  <Camera className="h-4 w-4" />
+                </Button>
+              )}
+            </div>
+          </div>
+
+          {/* Informações do Perfil */}
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <Label htmlFor="name">Nome Completo</Label>
+                <Input
+                  id="name"
+                  value={form.name}
+                  onChange={(e) => setForm({...form, name: e.target.value})}
+                  disabled={!editMode}
+                  className="mt-1"
+                />
+              </div>
+              <div>
+                <Label htmlFor="email">Email</Label>
+                <Input
+                  id="email"
+                  type="email"
+                  value={form.email}
+                  onChange={(e) => setForm({...form, email: e.target.value})}
+                  disabled={!editMode}
+                  className="mt-1"
+                />
+              </div>
+              <div>
+                <Label htmlFor="phone">Telefone</Label>
+                <Input
+                  id="phone"
+                  value={form.phone}
+                  onChange={(e) => setForm({...form, phone: e.target.value})}
+                  disabled={!editMode}
+                  className="mt-1"
+                />
+              </div>
+              <div>
+                <Label htmlFor="cpf">CPF</Label>
+                <Input
+                  id="cpf"
+                  value={form.cpf}
+                  onChange={(e) => setForm({...form, cpf: e.target.value})}
+                  disabled={!editMode}
+                  className="mt-1"
+                />
+              </div>
+            </div>
+
+            {/* Informações do Veículo */}
+            <div className="border-t pt-4">
+              <h3 className="text-lg font-semibold mb-4 flex items-center">
+                <Truck className="h-5 w-5 mr-2" />
+                Informações do Veículo
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="vehicle_type">Tipo de Veículo</Label>
+                  <select
+                    id="vehicle_type"
+                    value={form.vehicle_type}
+                    onChange={(e) => setForm({...form, vehicle_type: e.target.value})}
+                    disabled={!editMode}
+                    className="mt-1 block w-full rounded-md border border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 disabled:bg-gray-100 px-3 py-2"
+                  >
+                    <option value="">Selecione...</option>
+                    <option value="MOTO">Moto</option>
+                    <option value="CARRO">Carro</option>
+                    <option value="BICICLETA">Bicicleta</option>
+                  </select>
+                </div>
+                <div>
+                  <Label htmlFor="vehicle_model">Modelo</Label>
+                  <Input
+                    id="vehicle_model"
+                    value={form.vehicle_model}
+                    onChange={(e) => setForm({...form, vehicle_model: e.target.value})}
+                    disabled={!editMode}
+                    className="mt-1"
+                  />
+                </div>
+                <div className="flex items-center space-x-2">
+                  <Switch
+                    id="has_plate"
+                    checked={form.has_plate}
+                    onCheckedChange={(checked) => setForm({...form, has_plate: checked})}
+                    disabled={!editMode}
+                  />
+                  <Label htmlFor="has_plate">Possui Placa</Label>
+                </div>
+                {form.has_plate && (
+                  <div>
+                    <Label htmlFor="plate">Placa</Label>
+                    <Input
+                      id="plate"
+                      value={form.plate}
+                      onChange={(e) => setForm({...form, plate: e.target.value})}
+                      disabled={!editMode}
+                      className="mt-1"
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Estatísticas */}
+            <div className="border-t pt-4">
+              <h3 className="text-lg font-semibold mb-4 flex items-center">
+                <TrendingUp className="h-5 w-5 mr-2" />
+                Estatísticas
+              </h3>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <Card>
+                  <CardContent className="p-4 text-center">
+                    <div className="text-2xl font-bold text-blue-600">{deliveryPerson?.totalDeliveries || 0}</div>
+                    <div className="text-sm text-gray-600">Entregas Realizadas</div>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="p-4 text-center">
+                    <div className="text-2xl font-bold text-green-600">{deliveryPerson?.rating || 0}</div>
+                    <div className="text-sm text-gray-600">Avaliação</div>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="p-4 text-center">
+                    <div className="text-2xl font-bold text-orange-600">{activeOrders?.length || 0}</div>
+                    <div className="text-sm text-gray-600">Em Andamento</div>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="p-4 text-center">
+                    <div className="text-2xl font-bold text-purple-600">{todayFaturamento.toFixed(2)}</div>
+                    <div className="text-sm text-gray-600">Hoje (R$)</div>
+                  </CardContent>
+                </Card>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Rodapé fixo */}
+        <FooterBar notifications={unreadNotifications} faturamento={todayFaturamento} activeOrders={activeOrders?.length || 0} currentScreen={currentScreen} />
       </div>
     );
   };
 
-  // Rodapé fixo com informações
-  const FooterBar = ({ notifications, faturamento, activeOrders }: { notifications: number, faturamento: number, activeOrders: number }) => {
-    const navigate = useNavigate();
-    
-    const formatCurrency = (value: number) => {
-      return new Intl.NumberFormat('pt-BR', {
-        style: 'currency',
-        currency: 'BRL'
-      }).format(value);
-    };
-
+  // Tela de Histórico
+  const HistoryScreen = () => {
     return (
-      <footer className="fixed bottom-0 left-0 w-full bg-white border-t shadow-lg flex justify-around items-center py-2 z-40">
-        <button onClick={() => navigate('/notifications')} className="flex flex-col items-center focus:outline-none">
-          <span className="text-xs text-gray-500">Notificações</span>
-          <span className="font-bold text-blue-600">{notifications}</span>
-        </button>
-        <button onClick={() => navigate('/faturamento')} className="flex flex-col items-center focus:outline-none">
-          <span className="text-xs text-gray-500">Faturamento</span>
-          <span className="font-bold text-green-600 text-xs">{formatCurrency(faturamento)}</span>
-        </button>
-        <button onClick={() => navigate('/active-orders')} className="flex flex-col items-center focus:outline-none">
-          <span className="text-xs text-gray-500">Em Entrega</span>
-          <span className="font-bold text-orange-500">{activeOrders}</span>
-        </button>
-      </footer>
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-green-50">
+        {/* Header */}
+        <div className="bg-white/80 backdrop-blur-md shadow-lg border-b border-gray-100">
+          <div className="flex items-center justify-between p-6">
+            <div className="flex items-center space-x-4">
+              <Button 
+                variant="ghost" 
+                onClick={() => setCurrentScreen("dashboard")}
+                className="p-2"
+              >
+                <Navigation className="h-5 w-5" />
+              </Button>
+              <h1 className="text-xl font-bold text-gray-800">Histórico de Entregas</h1>
+            </div>
+          </div>
+        </div>
+
+        {/* Conteúdo do Histórico */}
+        <div className="p-6 pb-24">
+          <div className="space-y-4">
+            {history.length === 0 ? (
+              <div className="text-center py-12">
+                <History className="h-12 w-12 text-gray-300 mx-auto mb-4" />
+                <h4 className="text-lg font-medium text-gray-600 mb-2">Nenhuma entrega encontrada</h4>
+                <p className="text-gray-500">Seu histórico de entregas aparecerá aqui</p>
+              </div>
+            ) : (
+              history.map((order) => (
+                <Card key={order.id} className="hover:shadow-lg transition-shadow">
+                  <CardContent className="p-4">
+                    <div className="flex justify-between items-start mb-3">
+                      <div>
+                        <h4 className="font-semibold">{order.establishment_name}</h4>
+                        <p className="text-sm text-muted-foreground">{order.endereco}</p>
+                      </div>
+                      <Badge variant="secondary">Cliente: {order.customer_name}</Badge>
+                    </div>
+                    <div className="flex items-center text-sm text-muted-foreground mb-3">
+                      <MapPin className="h-4 w-4 mr-1" />
+                      <span>{order.endereco}</span>
+                      <Clock className="h-4 w-4 ml-3 mr-1" />
+                      <span>{order.finished_at ? new Date(order.finished_at).toLocaleString() : '-'}</span>
+                    </div>
+                    <div className="flex flex-wrap gap-2 mb-2">
+                      <Badge className="bg-blue-100 text-blue-800 font-semibold text-base shadow">
+                        {order.payment_method === 'CASH' ? 'Dinheiro' : order.payment_method === 'CREDIT' ? 'Cartão de Crédito' : order.payment_method === 'DEBIT' ? 'Cartão de Débito' : order.payment_method === 'PIX' ? 'PIX' : order.payment_method}
+                      </Badge>
+                      {order.change_amount !== undefined && order.change_amount !== null && Number(order.change_amount) > 0 && (
+                        <Badge className="bg-green-100 text-green-800 font-semibold text-base shadow">
+                          Troco: R$ {Number(order.change_amount).toFixed(2).replace('.', ',')}
+                        </Badge>
+                      )}
+                      <Badge className="bg-green-100 text-green-800 font-semibold text-base shadow">
+                        R$ {Number(order.delivery_fee || 0).toFixed(2).replace('.', ',')}
+                      </Badge>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm">Telefone: {order.customer_phone}</span>
+                      <Badge className="bg-green-500 text-white">Finalizada</Badge>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))
+            )}
+          </div>
+        </div>
+
+        {/* Rodapé fixo */}
+        <FooterBar notifications={unreadNotifications} faturamento={todayFaturamento} activeOrders={activeOrders?.length || 0} />
+      </div>
     );
   };
 
-  // Função para aceitar pedido
-  const handleAcceptOrder = async (orderId: number) => {
-    try {
-      await api.post(`/orders/${orderId}/accept`);
-      toast.success('Pedido aceito com sucesso!', { duration: 2000 });
-      // Busca os detalhes do pedido aceito para exibir na próxima tela
-      const response = await api.get(`/orders/${orderId}`);
-      setSelectedOrder(response.data);
-      setCurrentScreen("orderDetails");
-      // Atualiza a lista de pedidos disponíveis removendo o pedido aceito
-      setPendingOrders(prev => prev.filter(order => order.pedido_id !== orderId));
-    } catch (err: any) {
-      if (err.response?.status === 400) {
-        toast.error('Pedido não está mais disponível para entrega', { duration: 2000 });
-        // Remove o pedido da lista se não estiver mais disponível
-        setPendingOrders(prev => prev.filter(order => order.pedido_id !== orderId));
-      } else if (err.response?.status === 404) {
-        toast.error('Pedido não encontrado', { duration: 2000 });
-      } else {
-        toast.error(err.response?.data?.message || 'Erro ao aceitar pedido', { duration: 2000 });
-      }
-    }
-  };
-
-  // Função para finalizar entrega
-  const handleFinishOrder = async (orderId: number) => {
-    try {
-      // Verificar se o pedido está atribuído ao entregador logado
-      const order = activeOrders.find((o: any) => o.id === orderId);
-      if (!order) {
-        toast.error('Pedido não encontrado', { duration: 2000 });
-        return;
-      }
-      if (Number(order.delivery_id) !== user?.id) {
-        console.log(`Tentativa de finalizar pedido ${orderId}: delivery_id=${order.delivery_id}, user.id=${user?.id}`);
-        toast.error('Você não tem permissão para finalizar este pedido', { duration: 2000 });
-        return;
-      }
-
-      await api.post(`/orders/${orderId}/finish`);
-      toast.success('Entrega finalizada com sucesso!', { duration: 2000 });
-      // Atualiza a lista de pedidos em andamento
-      const response = await api.get('/orders/active');
-      const filteredOrders = response.data.filter((order: any) => 
-        Number(order.delivery_id) === user?.id
-      );
-      setActiveOrders(filteredOrders);
-    } catch (err: any) {
-      if (err.response?.status === 403) {
-        toast.error('Você não tem permissão para finalizar este pedido ou ele não está em entrega', { duration: 2000 });
-      } else if (err.response?.status === 404) {
-        toast.error('Pedido não encontrado', { duration: 2000 });
-      } else {
-        toast.error(err.response?.data?.message || 'Erro ao finalizar entrega', { duration: 2000 });
-      }
-    }
-  };
-
-  // 4. O botão de aceitar deve chamar o endpoint de aceitar oferta
-  const handleAcceptOffer = async (offerId: number) => {
-    try {
-      await api.post(`/order-offers/${offerId}/accept`);
-      toast.success('Pedido aceito com sucesso!', { duration: 2000 });
-      refreshOrders(); // Atualiza as ofertas
-      // Atualiza imediatamente os pedidos em andamento
-      fetchActiveOrders();
-      // Opcional: buscar detalhes do pedido aceito se necessário
-    } catch (err: any) {
-      toast.error(err.response?.data?.message || 'Erro ao aceitar oferta', { duration: 2000 });
-    }
-  };
-
-  // Renderização condicional das telas
-  switch (currentScreen) {
-    case "orderDetails":
-      return <OrderDetails />;
-    case "history":
-      return <HistoryScreen />;
-    case "profile":
-      return <ProfileScreen />;
-    default:
-      return (
-        <>
-          <Dashboard />
-          {selectedOrder && (
-            <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
-              <div className="bg-white rounded-lg shadow-lg p-6 w-full max-w-md relative">
-                <button className="absolute top-2 right-2 text-gray-400 hover:text-gray-600" onClick={() => setSelectedOrder(null)}>
-                  &times;
-                </button>
-                <h2 className="text-lg font-bold mb-4">Detalhes do Pedido</h2>
-                <div className="mb-2">
-                  <strong>Estabelecimento:</strong> {selectedOrder.establishment_name || selectedOrder.estabelecimento || selectedOrder.restaurant}<br />
-                  <strong>Endereço Estabelecimento:</strong> {selectedOrder.establishment_address || selectedOrder.retirada || selectedOrder.restaurantAddress}<br />
-                </div>
-                <div className="mb-2">
-                  <strong>Cliente:</strong> {selectedOrder.customer_name || selectedOrder.cliente || selectedOrder.customerName}<br />
-                  <strong>Endereço Cliente:</strong> {selectedOrder.customer_address || selectedOrder.endereco || selectedOrder.customerAddress}<br />
-                  <strong>Telefone Cliente:</strong> {selectedOrder.customer_phone || selectedOrder.telefone}<br />
-                </div>
-              </div>
-            </div>
-          )}
-          <OrderOfferModal
-            offer={currentOffer}
-            timeLeft={timeLeft}
-            isVisible={isTimerActive}
-            onAccept={acceptOffer}
-            onReject={rejectOffer}
-          />
-        </>
-      );
-  }
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-green-50">
+      {currentScreen === "login" ? <LoginScreen /> : 
+       currentScreen === "dashboard" ? <Dashboard /> : 
+       currentScreen === "profile" ? <ProfileScreen /> : 
+       currentScreen === "history" ? <HistoryScreen /> : null}
+    </div>
+  );
 };
 
 export default Index;
