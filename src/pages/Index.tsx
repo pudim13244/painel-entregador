@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -48,24 +48,11 @@ import {
 import api, { fetchDeliveryProfile, updateDeliveryProfile } from "@/services/api";
 import { toast } from 'sonner';
 import { useAuth } from "@/contexts/AuthContext";
-import { PWAStatus } from "@/components/PWAStatus";
+
 import { useNotifications } from "@/hooks/useNotifications";
-import { useOrderOffers } from "@/hooks/useOrderOffers";
 
 import { io } from "socket.io-client";
 import notificationSound from "@/../public/sounds/notification.mp3";
-
-// Função utilitária para calcular segundos restantes
-function getSecondsLeft(createdAt: string) {
-  let dateStr = createdAt;
-  if (!dateStr.endsWith('Z')) {
-    dateStr += 'Z';
-  }
-  const created = new Date(dateStr).getTime();
-  const now = Date.now();
-  const diff = Math.floor((now - created) / 1000);
-  return Math.max(15 - diff, 0);
-}
 
 // Funções auxiliares
 function isThisWeek(dateString: string) {
@@ -81,8 +68,6 @@ function isThisWeek(dateString: string) {
 const Index = () => {
   const { user, logout } = useAuth();
   const [pendingOrders, setPendingOrders] = useState<any[]>([]);
-  const offerTimers = useRef<{ [offerId: number]: number }>({});
-  const [offerCountdowns, setOfferCountdowns] = useState<{ [offerId: number]: number }>({});
   const [deliveryPerson, setDeliveryPerson] = useState<any>(null);
   const [isAvailable, setIsAvailable] = useState(() => {
     const saved = localStorage.getItem('isAvailable');
@@ -96,7 +81,7 @@ const Index = () => {
   const [showProfileAlert, setShowProfileAlert] = useState(false);
   const navigate = useNavigate();
   const [editMode, setEditMode] = useState(false);
-  const [form, setForm] = useState({
+  const formRef = useRef({
     name: deliveryPerson?.name || "",
     email: deliveryPerson?.email || "",
     cpf: deliveryPerson?.cpf || "",
@@ -107,41 +92,56 @@ const Index = () => {
     plate: deliveryPerson?.plate || "",
     photo_url: deliveryPerson?.photo_url || "",
   });
+  
+  const [form, setForm] = useState(formRef.current);
+
+  // Função para atualizar o form de forma otimizada
+  const updateForm = useCallback((field: string, value: any) => {
+    formRef.current = { ...formRef.current, [field]: value };
+    setForm(formRef.current);
+  }, []);
+
   const [todayFaturamento, setTodayFaturamento] = useState(0);
   const [weekFaturamento, setWeekFaturamento] = useState(0);
+  const [offerStatus, setOfferStatus] = useState({ active_offers: 0, max_offers: 3, can_receive_more: true, remaining_slots: 3 });
   const { unreadCount: unreadNotifications, fetchUnreadCount } = useNotifications();
-  const { 
-    currentOffer, 
-    timeLeft, 
-    isTimerActive, 
-    acceptOffer, 
-    rejectOffer 
-  } = useOrderOffers();
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  // Funções auxiliares
-  const refreshOrders = async () => {
+  // Buscar status das ofertas
+  const fetchOfferStatus = useCallback(async () => {
+    try {
+      const response = await api.get('/order-offers/status');
+      setOfferStatus(response.data);
+    } catch (err) {
+      // Erro silencioso
+    }
+  }, []);
+
+  // Funções auxiliares otimizadas com useCallback
+  const refreshOrders = useCallback(async () => {
     setLoading(true);
     try {
-      const response = await api.get('/order-offers');
-      setPendingOrders(response.data);
+      const response = await api.get('/order-offers/active');
+      const activeOffers = response.data.filter((offer: any) => !offer.expirada);
+      setPendingOrders(activeOffers);
+      await fetchOfferStatus();
     } catch (err) {
       setPendingOrders([]);
     } finally {
       setLoading(false);
     }
-  };
+  }, [fetchOfferStatus]);
 
-  const fetchActiveOrders = async () => {
+  const fetchActiveOrders = useCallback(async () => {
     try {
       const response = await api.get('/orders/active');
       setActiveOrders(response.data);
     } catch (err) {
       setActiveOrders([]);
     }
-  };
+  }, []);
 
-  const fetchTodayFaturamento = async () => {
+  const fetchTodayFaturamento = useCallback(async () => {
     try {
       const response = await api.get('/orders/history');
       const today = new Date().toISOString().split('T')[0];
@@ -149,57 +149,64 @@ const Index = () => {
         order.finished_at && order.finished_at.startsWith(today)
       );
       const total = todayOrders.reduce((sum: number, order: any) => 
-        sum + Number(order.delivery_fee || 0), 0
+        sum + Number(order.delivery_fee || 3), 0
       );
       setTodayFaturamento(total);
     } catch (err) {
       setTodayFaturamento(0);
     }
-  };
+  }, []);
 
-  const fetchFaturamento = async () => {
+  const fetchFaturamento = useCallback(async () => {
     try {
       const response = await api.get('/delivery-history');
       const weekOrders = response.data.filter((order: any) => 
         order.finished_at && isThisWeek(order.finished_at)
       );
       const total = weekOrders.reduce((sum: number, order: any) => 
-        sum + Number(order.delivery_fee || 0), 0
+        sum + Number(order.delivery_fee || 3), 0
       );
       setWeekFaturamento(total);
     } catch (err) {
       setWeekFaturamento(0);
     }
-  };
+  }, []);
 
-  const fetchProfile = async () => {
+  const fetchProfile = useCallback(async () => {
     try {
       const profile = await fetchDeliveryProfile();
       setDeliveryPerson(profile);
-      setForm({
-        name: profile?.name || "",
-        email: profile?.email || "",
-        cpf: profile?.cpf || "",
-        phone: profile?.phone || "",
-        vehicle_type: profile?.vehicle_type || "",
-        vehicle_model: profile?.vehicle_model || "",
-        has_plate: profile?.has_plate || false,
-        plate: profile?.plate || "",
-        photo_url: profile?.photo_url || "",
-      });
+      
+      // Só atualizar o form se não estiver em modo de edição
+      if (!editMode) {
+        const newForm = {
+          name: profile?.name || "",
+          email: profile?.email || "",
+          cpf: profile?.cpf || "",
+          phone: profile?.phone || "",
+          vehicle_type: profile?.vehicle_type || "",
+          vehicle_model: profile?.vehicle_model || "",
+          has_plate: profile?.has_plate || false,
+          plate: profile?.plate || "",
+          photo_url: profile?.photo_url || "",
+        };
+        
+        formRef.current = newForm;
+        setForm(newForm);
+      }
     } catch (err) {
-      console.error('Erro ao buscar perfil:', err);
+      // Erro silencioso
     }
-  };
+  }, [editMode]);
 
-  const fetchHistory = async () => {
+  const fetchHistory = useCallback(async () => {
     try {
       const response = await api.get('/delivery-history');
       setHistory(response.data);
     } catch (err) {
       setHistory([]);
     }
-  };
+  }, []);
 
   // Handlers
   const handleAcceptOffer = async (offerId: number) => {
@@ -220,6 +227,7 @@ const Index = () => {
       fetchActiveOrders();
       fetchTodayFaturamento();
       fetchFaturamento();
+      fetchHistory(); // Adicionar para atualizar o histórico
     } catch (err) {
       toast.error("Erro ao finalizar entrega");
     }
@@ -250,6 +258,31 @@ const Index = () => {
       .filter(field => !form[field.key] || form[field.key].trim() === '')
       .map(field => field.label);
   }
+
+  // Sempre que mudar, salva no localStorage
+  useEffect(() => {
+    localStorage.setItem('isAvailable', JSON.stringify(isAvailable));
+  }, [isAvailable]);
+
+  // Buscar dados iniciais
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        await Promise.all([
+          fetchActiveOrders(),
+          fetchProfile(),
+          fetchHistory(),
+          fetchTodayFaturamento(),
+          fetchFaturamento(),
+          fetchUnreadCount()
+        ]);
+      } catch (err) {
+        // Erro ao buscar dados iniciais:
+      }
+    };
+
+    fetchData();
+  }, []); // Removidas as dependências para executar apenas uma vez
 
   const FooterBar = ({ notifications, faturamento, activeOrders, currentScreen }: { notifications: number, faturamento: number, activeOrders: number, currentScreen: string }) => {
     const formatCurrency = (value: number) => {
@@ -287,7 +320,7 @@ const Index = () => {
           </div>
           <div 
             className="flex flex-col items-center cursor-pointer hover:opacity-80 transition-opacity"
-            onClick={() => navigate('/recebimentos')}
+            onClick={() => navigate('/entregas')}
           >
             <div className="relative">
               <Truck className="h-6 w-6 text-orange-600" />
@@ -297,7 +330,7 @@ const Index = () => {
                 </Badge>
               )}
             </div>
-            <span className="text-xs text-gray-600 mt-1">Recebimentos</span>
+            <span className="text-xs text-gray-600 mt-1">Entregas</span>
           </div>
           <div 
             className={`flex flex-col items-center cursor-pointer hover:opacity-80 transition-opacity ${
@@ -313,96 +346,9 @@ const Index = () => {
     );
   };
 
-  // Sempre que mudar, salva no localStorage
-  useEffect(() => {
-    localStorage.setItem('isAvailable', JSON.stringify(isAvailable));
-  }, [isAvailable]);
 
-  // Buscar ofertas do entregador
-  useEffect(() => {
-    const fetchOffers = async () => {
-      setLoading(true);
-      try {
-        const response = await api.get('/order-offers');
-        setPendingOrders(response.data);
-      } catch (err) {
-        setPendingOrders([]);
-      } finally {
-        setLoading(false);
-      }
-    };
 
-    if (isAvailable) {
-      fetchOffers();
-    } else {
-      setPendingOrders([]);
-    }
-  }, [isAvailable]);
 
-  // Atualizar ofertas em tempo real via WebSocket
-  useEffect(() => {
-    const socket = io(import.meta.env.VITE_API_URL || 'http://localhost:4000');
-    const user = JSON.parse(localStorage.getItem('user') || '{}');
-    if (user?.id) {
-      socket.emit('registrar_entregador', user.id);
-      socket.on('nova_oferta', async () => {
-        try {
-          const response = await api.get('/order-offers');
-          setPendingOrders(response.data);
-        } catch (err) {
-          setPendingOrders([]);
-        }
-      });
-    }
-    return () => {
-      socket.disconnect();
-    };
-  }, []);
-
-  // Timers para ofertas
-  useEffect(() => {
-    const newCountdowns: { [offerId: number]: number } = {};
-    pendingOrders.forEach((offer) => {
-      if (!(offer.offer_id in offerTimers.current)) {
-        offerTimers.current[offer.offer_id] = window.setInterval(() => {
-          setOfferCountdowns((prev) => {
-            const next = { ...prev };
-            next[offer.offer_id] = (next[offer.offer_id] || 10) - 1;
-            if (next[offer.offer_id] <= 0) {
-              setPendingOrders((orders) => orders.filter((o) => o.offer_id !== offer.offer_id));
-              clearInterval(offerTimers.current[offer.offer_id]);
-              delete offerTimers.current[offer.offer_id];
-              delete next[offer.offer_id];
-            }
-            return next;
-          });
-        }, 1000);
-        newCountdowns[offer.offer_id] = 10;
-      } else {
-        newCountdowns[offer.offer_id] = offerCountdowns[offer.offer_id] || 10;
-      }
-    });
-    setOfferCountdowns(newCountdowns);
-    
-    Object.keys(offerTimers.current).forEach((id) => {
-      if (!pendingOrders.find((o) => o.offer_id === Number(id))) {
-        clearInterval(offerTimers.current[Number(id)]);
-        delete offerTimers.current[Number(id)];
-      }
-    });
-  }, [pendingOrders]);
-
-  // Inicializa o elemento de áudio
-  useEffect(() => {
-    audioRef.current = new window.Audio(notificationSound);
-    audioRef.current.volume = 0.5;
-    return () => {
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current = null;
-      }
-    };
-  }, []);
 
   // Buscar dados iniciais
   useEffect(() => {
@@ -417,13 +363,91 @@ const Index = () => {
           fetchUnreadCount()
         ]);
       } catch (err) {
-        console.error('Erro ao buscar dados iniciais:', err);
+        // Erro ao buscar dados iniciais:
       }
     };
 
     fetchData();
+  }, [fetchActiveOrders, fetchProfile, fetchHistory, fetchTodayFaturamento, fetchFaturamento, fetchUnreadCount]);
+
+  // Inicializa o elemento de áudio
+  useEffect(() => {
+    audioRef.current = new window.Audio(notificationSound);
+    audioRef.current.volume = 0.5;
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+    };
   }, []);
 
+  // Buscar ofertas do entregador (OTIMIZADO)
+  useEffect(() => {
+    const fetchOffers = async () => {
+      if (!isAvailable) {
+        setPendingOrders([]);
+        return;
+      }
+
+      setLoading(true);
+      try {
+        const response = await api.get('/order-offers/active');
+        const activeOffers = response.data.filter((offer: any) => !offer.expirada);
+        
+        setPendingOrders(activeOffers);
+        await fetchOfferStatus();
+      } catch (err) {
+        // Erro ao buscar ofertas:
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchOffers();
+    
+    const interval = setInterval(fetchOffers, 10000);
+    return () => clearInterval(interval);
+  }, [isAvailable]); // Removida dependência de fetchOfferStatus
+
+
+
+  // WebSocket otimizado
+  useEffect(() => {
+    const socket = io(import.meta.env.VITE_API_URL || 'http://localhost:4000');
+    const user = JSON.parse(localStorage.getItem('user') || '{}');
+    
+    if (user?.id) {
+      socket.emit('registrar_entregador', user.id);
+      
+      socket.on('nova_oferta', async (data) => {
+        // Tocar som de notificação
+        if (audioRef.current) {
+          audioRef.current.play().catch(err => {
+            // Erro ao tocar som
+          });
+        }
+        
+        // Mostrar toast
+        toast.success(`Nova oferta disponível!`);
+        
+        // Atualizar ofertas apenas se necessário
+        if (isAvailable) {
+          try {
+            const response = await api.get('/order-offers/active');
+            const activeOffers = response.data.filter((offer: any) => !offer.expirada);
+            setPendingOrders(activeOffers);
+          } catch (err) {
+            // Erro ao buscar ofertas via WebSocket:
+          }
+        }
+      });
+    }
+    
+    return () => {
+      socket.disconnect();
+    };
+  }, []); // Removida dependência de isAvailable
 
 
   const LoginScreen = () => {
@@ -440,7 +464,7 @@ const Index = () => {
         await login(email, password);
         toast.success('Login realizado com sucesso!');
       } catch (error: any) {
-        console.error('Erro no login:', error);
+        // Erro no login:
         toast.error(error.response?.data?.message || 'Erro ao fazer login');
       } finally {
         setLoading(false);
@@ -514,7 +538,7 @@ const Index = () => {
                 style={{ width: '60px', height: '60px' }}
               >
                 <AvatarImage 
-                  src={deliveryPerson?.photo_url ? deliveryPerson.photo_url.replace('uc?id=', 'uc?export=view&id=') : "/placeholder.svg"} 
+                  src={form.photo_url || deliveryPerson?.photo_url ? (form.photo_url || deliveryPerson.photo_url).replace('uc?id=', 'uc?export=view&id=') : "/placeholder.svg"} 
                 />
                 <AvatarFallback className="text-lg font-semibold bg-gradient-to-br from-blue-500 to-purple-600 text-white">
                   {deliveryPerson?.name?.[0] || "DR"}
@@ -583,22 +607,26 @@ const Index = () => {
         {/* Seção de Ganhos Moderna */}
         {isAvailable ? (
           <>
-            <div className="mb-6">
+            <div className="mb-6 pt-8">
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-bold text-gray-800 flex items-center">
-                  <Package className="h-5 w-5 mr-2 text-orange-600" />
-                  Pedidos Disponíveis
-                </h3>
-                <Button 
-                  variant="outline" 
-                  size="sm"
-                  onClick={refreshOrders}
-                  disabled={loading}
-                  className="hover:bg-orange-50 hover:border-orange-200 transition-colors"
-                >
-                  <RefreshCw className={`h-4 w-4 mr-1 ${loading ? 'animate-spin' : ''}`} />
-                  {loading ? 'Atualizando...' : 'Atualizar'}
-                </Button>
+                <div className="flex items-center space-x-4">
+                  <h3 className="text-lg font-bold text-gray-800 flex items-center">
+                    <Package className="h-5 w-5 mr-2 text-orange-600" />
+                    Pedidos Disponíveis
+                  </h3>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <Button 
+                    variant="outline" 
+                    size="sm"
+                    onClick={refreshOrders}
+                    disabled={loading}
+                    className="hover:bg-orange-50 hover:border-orange-200 transition-colors"
+                  >
+                    <RefreshCw className={`h-4 w-4 mr-1 ${loading ? 'animate-spin' : ''}`} />
+                    {loading ? 'Atualizando...' : 'Atualizar'}
+                  </Button>
+                </div>
               </div>
               
               {loading ? (
@@ -611,27 +639,19 @@ const Index = () => {
               ) : pendingOrders.length === 0 ? (
                 <div className="text-center py-12">
                   <Package className="h-12 w-12 text-gray-300 mx-auto mb-4" />
-                  <h4 className="text-lg font-medium text-gray-600 mb-2">Nenhum pedido disponível</h4>
-                  <p className="text-gray-500">Aguarde novos pedidos chegarem...</p>
+                  <h4 className="text-lg font-medium text-gray-600 mb-2">
+                    {!offerStatus.can_receive_more ? 'Limite de ofertas atingido' : 'Nenhum pedido disponível'}
+                  </h4>
+                  <p className="text-gray-500">
+                    {!offerStatus.can_receive_more 
+                      ? 'Você já tem 3 ofertas ativas. Aguarde elas expirarem ou serem aceitas.'
+                      : 'Aguarde novos pedidos chegarem...'
+                    }
+                  </p>
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {pendingOrders.map((offer) => {
-                    const secondsLeft = offerCountdowns[offer.offer_id] ?? 10;
-                    if (secondsLeft <= 0) return null;
-                    
-                    const progressPercent = Math.max(0, (secondsLeft / 10) * 100);
-                    let progressColor = 'bg-green-500';
-                    let urgencyText = 'Tempo normal';
-                    
-                    if (secondsLeft <= 2) {
-                      progressColor = 'bg-red-500';
-                      urgencyText = 'Última chance!';
-                    } else if (secondsLeft <= 5) {
-                      progressColor = 'bg-orange-500';
-                      urgencyText = 'Apressado!';
-                    }
-                    
                     return (
                       <Card 
                         key={offer.offer_id} 
@@ -663,32 +683,6 @@ const Index = () => {
                             <div className="flex items-center space-x-2">
                               <Package className="h-4 w-4 text-gray-500" />
                               <span className="text-sm text-gray-600">{offer.estabelecimento}</span>
-                            </div>
-                          </div>
-                          
-                          {/* Barra de progresso moderna */}
-                          <div className="mb-4">
-                            <div className="flex justify-between items-center mb-2">
-                              <span className="text-xs font-medium text-gray-600">Tempo restante</span>
-                              <span className={`text-xs font-bold ${
-                                secondsLeft <= 2 ? 'text-red-600' : 
-                                secondsLeft <= 5 ? 'text-orange-600' : 'text-green-600'
-                              }`}>
-                                {urgencyText}
-                              </span>
-                            </div>
-                            <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
-                              <div
-                                className={`h-3 transition-all duration-1000 ease-out ${progressColor} rounded-full`}
-                                style={{ width: `${progressPercent}%` }}
-                              />
-                            </div>
-                            <div className="flex justify-between items-center mt-2">
-                              <span className="text-xs text-gray-500">0s</span>
-                              <span className="text-sm font-mono font-bold text-gray-700">
-                                {secondsLeft}s
-                              </span>
-                              <span className="text-xs text-gray-500">10s</span>
                             </div>
                           </div>
                           
@@ -838,13 +832,39 @@ const Index = () => {
   const ProfileScreen = () => {
     const handleSave = async () => {
       try {
-        await updateDeliveryProfile(form);
+        await updateDeliveryProfile(formRef.current);
         toast.success('Perfil atualizado com sucesso!');
         setEditMode(false);
-        fetchProfile();
       } catch (err) {
         toast.error('Erro ao atualizar perfil');
       }
+    };
+
+    const handlePhotoUpload = () => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = 'image/*';
+      input.onchange = async (e) => {
+        const file = (e.target as HTMLInputElement).files?.[0];
+        if (file) {
+          try {
+            const formData = new FormData();
+            formData.append('photo', file);
+            
+            const response = await api.post('/delivery-person/upload-photo', formData, {
+              headers: { 'Content-Type': 'multipart/form-data' }
+            });
+            
+            // Atualizar o formulário com a nova URL
+            updateForm('photo_url', response.data.url);
+            
+            toast.success('Foto atualizada com sucesso!');
+          } catch (err) {
+            toast.error('Erro ao fazer upload da foto');
+          }
+        }
+      };
+      input.click();
     };
 
     return (
@@ -902,7 +922,7 @@ const Index = () => {
                 className="w-24 h-24 ring-4 ring-white shadow-lg"
               >
                 <AvatarImage 
-                  src={deliveryPerson?.photo_url ? deliveryPerson.photo_url.replace('uc?id=', 'uc?export=view&id=') : "/placeholder.svg"} 
+                  src={form.photo_url || deliveryPerson?.photo_url ? (form.photo_url || deliveryPerson.photo_url).replace('uc?id=', 'uc?export=view&id=') : "/placeholder.svg"} 
                 />
                 <AvatarFallback className="text-2xl font-semibold bg-gradient-to-br from-blue-500 to-purple-600 text-white">
                   {deliveryPerson?.name?.[0] || "DR"}
@@ -912,6 +932,7 @@ const Index = () => {
                 <Button 
                   size="sm" 
                   className="absolute -bottom-2 -right-2 rounded-full w-8 h-8 p-0"
+                  onClick={handlePhotoUpload}
                 >
                   <Camera className="h-4 w-4" />
                 </Button>
@@ -927,7 +948,7 @@ const Index = () => {
                 <Input
                   id="name"
                   value={form.name}
-                  onChange={(e) => setForm({...form, name: e.target.value})}
+                  onChange={(e) => updateForm('name', e.target.value)}
                   disabled={!editMode}
                   className="mt-1"
                 />
@@ -938,7 +959,7 @@ const Index = () => {
                   id="email"
                   type="email"
                   value={form.email}
-                  onChange={(e) => setForm({...form, email: e.target.value})}
+                  onChange={(e) => updateForm('email', e.target.value)}
                   disabled={!editMode}
                   className="mt-1"
                 />
@@ -948,7 +969,7 @@ const Index = () => {
                 <Input
                   id="phone"
                   value={form.phone}
-                  onChange={(e) => setForm({...form, phone: e.target.value})}
+                  onChange={(e) => updateForm('phone', e.target.value)}
                   disabled={!editMode}
                   className="mt-1"
                 />
@@ -958,7 +979,7 @@ const Index = () => {
                 <Input
                   id="cpf"
                   value={form.cpf}
-                  onChange={(e) => setForm({...form, cpf: e.target.value})}
+                  onChange={(e) => updateForm('cpf', e.target.value)}
                   disabled={!editMode}
                   className="mt-1"
                 />
@@ -977,7 +998,7 @@ const Index = () => {
                   <select
                     id="vehicle_type"
                     value={form.vehicle_type}
-                    onChange={(e) => setForm({...form, vehicle_type: e.target.value})}
+                    onChange={(e) => updateForm('vehicle_type', e.target.value)}
                     disabled={!editMode}
                     className="mt-1 block w-full rounded-md border border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 disabled:bg-gray-100 px-3 py-2"
                   >
@@ -992,7 +1013,7 @@ const Index = () => {
                   <Input
                     id="vehicle_model"
                     value={form.vehicle_model}
-                    onChange={(e) => setForm({...form, vehicle_model: e.target.value})}
+                    onChange={(e) => updateForm('vehicle_model', e.target.value)}
                     disabled={!editMode}
                     className="mt-1"
                   />
@@ -1001,7 +1022,7 @@ const Index = () => {
                   <Switch
                     id="has_plate"
                     checked={form.has_plate}
-                    onCheckedChange={(checked) => setForm({...form, has_plate: checked})}
+                    onCheckedChange={(checked) => updateForm('has_plate', checked)}
                     disabled={!editMode}
                   />
                   <Label htmlFor="has_plate">Possui Placa</Label>
@@ -1012,7 +1033,7 @@ const Index = () => {
                     <Input
                       id="plate"
                       value={form.plate}
-                      onChange={(e) => setForm({...form, plate: e.target.value})}
+                      onChange={(e) => updateForm('plate', e.target.value)}
                       disabled={!editMode}
                       className="mt-1"
                     />
@@ -1119,7 +1140,7 @@ const Index = () => {
                         </Badge>
                       )}
                       <Badge className="bg-green-100 text-green-800 font-semibold text-base shadow">
-                        R$ {Number(order.delivery_fee || 0).toFixed(2).replace('.', ',')}
+                        R$ {Number(order.delivery_fee || 3).toFixed(2).replace('.', ',')}
                       </Badge>
                     </div>
                     <div className="flex justify-between items-center">
@@ -1134,7 +1155,7 @@ const Index = () => {
         </div>
 
         {/* Rodapé fixo */}
-        <FooterBar notifications={unreadNotifications} faturamento={todayFaturamento} activeOrders={activeOrders?.length || 0} />
+        <FooterBar notifications={unreadNotifications} faturamento={todayFaturamento} activeOrders={activeOrders?.length || 0} currentScreen={currentScreen} />
       </div>
     );
   };

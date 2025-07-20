@@ -14,6 +14,7 @@ import Faturamento from "@/pages/Faturamento";
 import ActiveOrders from "@/pages/ActiveOrders";
 import FaturamentoEstabelecimento from "@/pages/FaturamentoEstabelecimento";
 import Recebimentos from './pages/Recebimentos';
+import Entregas from './pages/Entregas';
 
 const queryClient = new QueryClient();
 
@@ -34,6 +35,7 @@ const App = () => (
               <Route path="/faturamento/estabelecimento/:id" element={<FaturamentoEstabelecimento />} />
               <Route path="/active-orders" element={<ActiveOrders />} />
               <Route path="/recebimentos" element={<Recebimentos />} />
+              <Route path="/entregas" element={<Entregas />} />
             </Route>
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />

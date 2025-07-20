@@ -24,37 +24,28 @@ const api = axios.create({
 // Interceptor para adicionar o token JWT em todas as requisições
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('token');
-  console.log('🌐 Requisição para:', config.url);
-  console.log('Token presente:', token ? 'Sim' : 'Não');
   
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
-    console.log('✅ Token adicionado ao header Authorization');
-    console.log('Header Authorization:', config.headers.Authorization);
+    console.log('✅ [API] Token adicionado para:', config.url);
   } else {
-    console.log('❌ Token não encontrado no localStorage');
+    console.log('❌ [API] Token não encontrado para:', config.url);
   }
   
-  console.log('Headers finais:', config.headers);
   return config;
 });
 
 // Interceptor para tratar erros de autenticação
 api.interceptors.response.use(
   response => {
-    console.log('✅ Resposta bem-sucedida:', response.status, response.config.url);
+    console.log('✅ [API] Resposta bem-sucedida:', response.status, response.config.url);
     return response;
   },
   error => {
-    console.log('❌ Erro na requisição:', error.response?.status, error.config?.url);
-    console.log('Erro completo:', error);
+    console.log('❌ [API] Erro na requisição:', error.response?.status, error.config?.url);
     
     if (error.response && error.response.status === 401) {
-      console.log('🚪 Erro 401 detectado, mas não redirecionando automaticamente');
-      // Removido o redirecionamento automático para permitir login manual
-      // localStorage.removeItem('token');
-      // localStorage.removeItem('user');
-      // window.location.href = '/login';
+      console.log('🚪 [API] Erro 401 detectado');
     }
     return Promise.reject(error);
   }

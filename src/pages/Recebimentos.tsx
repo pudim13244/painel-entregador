@@ -13,11 +13,23 @@ interface Pedido {
   delivery_fee: number;
   taxa_recebida: number;
   finished_at: string;
+  establishment_name?: string; // Adicionado para armazenar o nome do estabelecimento
 }
 
 interface Estabelecimento {
   id: number;
   name: string;
+}
+
+interface SolicitacaoPendente {
+  id: number;
+  codigo: string;
+  codigo_confirmacao: string;
+  total: number;
+  pedidos_ids: number[];
+  created_at: string;
+  establishment_id?: number; // Adicionado para armazenar o ID do estabelecimento
+  establishment_name?: string; // Adicionado para armazenar o nome do estabelecimento
 }
 
 // FooterBar modernizado
@@ -83,18 +95,17 @@ const FooterBar = ({ notifications, faturamento, activeOrders }: { notifications
 const Recebimentos = () => {
   const navigate = useNavigate();
   const { unreadCount: unreadNotifications } = useNotifications();
-  const [activeTab, setActiveTab] = useState<'nao-recebido' | 'recebido'>('nao-recebido');
+  const [activeTab, setActiveTab] = useState<'nao-recebido' | 'recebido' | 'pendentes'>('nao-recebido');
   const [pedidos, setPedidos] = useState<Pedido[]>([]);
   const [estabelecimentos, setEstabelecimentos] = useState<Estabelecimento[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedEstabelecimento, setSelectedEstabelecimento] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedPedidos, setSelectedPedidos] = useState<number[]>([]);
-  const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [confirming, setConfirming] = useState(false);
-  const [codigoConfirmacao, setCodigoConfirmacao] = useState('');
   const [todayFaturamento, setTodayFaturamento] = useState(0);
   const [activeOrders, setActiveOrders] = useState(0);
+  const [solicitacoesPendentes, setSolicitacoesPendentes] = useState<SolicitacaoPendente[]>([]);
 
   // Calcular valor total dos pedidos selecionados
   const totalSelecionado = pedidos
@@ -152,9 +163,38 @@ const Recebimentos = () => {
     }
   };
 
+  // Buscar solicitações pendentes
+  const fetchSolicitacoesPendentes = async () => {
+    try {
+      const response = await api.get('/recebimentos/pendentes');
+      setSolicitacoesPendentes(response.data);
+    } catch (error) {
+      console.error('Erro ao buscar solicitações pendentes:', error);
+      // Se a rota não existir, manter o estado local
+    }
+  };
+
+  // Agrupar solicitações por estabelecimento
+  const solicitacoesAgrupadas = solicitacoesPendentes.reduce((acc, solicitacao) => {
+    const establishmentId = solicitacao.establishment_id || 'unknown';
+    if (!acc[establishmentId]) {
+      acc[establishmentId] = [];
+    }
+    acc[establishmentId].push(solicitacao);
+    return acc;
+  }, {} as { [key: string]: SolicitacaoPendente[] });
+
+  // Verificar se um pedido já tem solicitação ativa
+  const pedidoTemSolicitacaoAtiva = (pedidoId: number) => {
+    return solicitacoesPendentes.some(solicitacao => 
+      solicitacao.pedidos_ids.includes(pedidoId)
+    );
+  };
+
   useEffect(() => {
     fetchEstabelecimentos();
     fetchFooterData();
+    fetchSolicitacoesPendentes(); // Adicionado para buscar solicitações pendentes
   }, []);
 
   useEffect(() => {
@@ -175,7 +215,8 @@ const Recebimentos = () => {
   const selectAll = () => {
     if (activeTab === 'nao-recebido') {
       const naoRecebidos = pedidos.filter(p => p.taxa_recebida === 0);
-      setSelectedPedidos(naoRecebidos.map(p => p.id));
+      const pedidosDisponiveis = naoRecebidos.filter(p => !pedidoTemSolicitacaoAtiva(p.id));
+      setSelectedPedidos(pedidosDisponiveis.map(p => p.id));
     }
   };
 
@@ -193,41 +234,57 @@ const Recebimentos = () => {
 
     setConfirming(true);
     try {
-      const response = await api.post('/recebimentos/solicitar', {
-        pedidos_ids: selectedPedidos
-      });
+      // Agrupar pedidos selecionados por estabelecimento
+      const pedidosSelecionados = pedidos.filter(p => selectedPedidos.includes(p.id));
+      const pedidosPorEstabelecimento = pedidosSelecionados.reduce((acc, pedido) => {
+        if (!acc[pedido.establishment_id]) {
+          acc[pedido.establishment_id] = [];
+        }
+        acc[pedido.establishment_id].push(pedido);
+        return acc;
+      }, {} as { [key: number]: Pedido[] });
+
+      // Criar uma solicitação para cada estabelecimento
+      const novasSolicitacoes: SolicitacaoPendente[] = [];
       
-      setCodigoConfirmacao(response.data.codigo);
-      setShowConfirmModal(true);
+      for (const [establishmentId, pedidosEstabelecimento] of Object.entries(pedidosPorEstabelecimento)) {
+        const pedidosIds = pedidosEstabelecimento.map(p => p.id);
+        const total = pedidosEstabelecimento.reduce((sum, p) => sum + Number(p.delivery_fee || 3), 0);
+        
+        const response = await api.post('/recebimentos/solicitar', {
+          pedidos_ids: pedidosIds
+        });
+        
+        // Buscar nome do estabelecimento
+        let establishmentName = `Estabelecimento ${establishmentId}`;
+        try {
+          const establishmentResponse = await api.get(`/establishments/${establishmentId}`);
+          if (establishmentResponse.data && establishmentResponse.data.name) {
+            establishmentName = establishmentResponse.data.name;
+          }
+        } catch (error) {
+          console.error('Erro ao buscar nome do estabelecimento:', error);
+        }
+        
+        const novaSolicitacao: SolicitacaoPendente = {
+          id: response.data.id,
+          codigo: response.data.codigo,
+          codigo_confirmacao: response.data.codigo,
+          total: response.data.total,
+          pedidos_ids: pedidosIds,
+          created_at: new Date().toISOString(),
+          establishment_id: Number(establishmentId),
+          establishment_name: establishmentName
+        };
+        
+        novasSolicitacoes.push(novaSolicitacao);
+      }
+      
+      setSolicitacoesPendentes(prev => [...novasSolicitacoes, ...prev]);
       setSelectedPedidos([]);
       fetchPedidos(); // Atualizar lista
     } catch (error: any) {
       alert(error.response?.data?.message || 'Erro ao solicitar recebimento');
-    } finally {
-      setConfirming(false);
-    }
-  };
-
-  // Confirmar recebimento
-  const confirmarRecebimento = async () => {
-    if (!codigoConfirmacao) {
-      alert('Código de confirmação é obrigatório');
-      return;
-    }
-
-    setConfirming(true);
-    try {
-      await api.post('/recebimentos/confirmar', {
-        recebimento_id: 1, // Ajustar conforme necessário
-        codigo: codigoConfirmacao
-      });
-      
-      alert('Recebimento confirmado com sucesso!');
-      setShowConfirmModal(false);
-      setCodigoConfirmacao('');
-      fetchPedidos();
-    } catch (error: any) {
-      alert(error.response?.data?.message || 'Erro ao confirmar recebimento');
     } finally {
       setConfirming(false);
     }
@@ -307,6 +364,21 @@ const Recebimentos = () => {
         </div>
       </div>
 
+      {/* Informação sobre pedidos com solicitação ativa */}
+      {activeTab === 'nao-recebido' && pedidos.some(p => pedidoTemSolicitacaoAtiva(p.id)) && (
+        <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 mb-4">
+          <div className="flex items-center space-x-2">
+            <div className="w-3 h-3 bg-orange-500 rounded-full animate-pulse"></div>
+            <span className="text-sm text-orange-800 font-medium">
+              Pedidos com solicitação ativa
+            </span>
+          </div>
+          <p className="text-xs text-orange-700 mt-1">
+            Alguns pedidos já possuem solicitação de recebimento pendente e não podem ser selecionados novamente.
+          </p>
+        </div>
+      )}
+
       {/* Abas */}
       <div className="bg-white rounded-lg shadow mb-6">
         <div className="flex border-b">
@@ -330,6 +402,16 @@ const Recebimentos = () => {
           >
             Recebidos ({pedidos.filter(p => p.taxa_recebida === 1).length})
           </button>
+          <button
+            onClick={() => setActiveTab('pendentes')}
+            className={`flex-1 px-4 py-3 text-center font-medium transition ${
+              activeTab === 'pendentes'
+                ? 'text-yellow-600 border-b-2 border-yellow-600 bg-yellow-50'
+                : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            Pendentes ({solicitacoesPendentes.length})
+          </button>
         </div>
 
         {/* Lista de Pedidos */}
@@ -339,58 +421,155 @@ const Recebimentos = () => {
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-green-500 mx-auto"></div>
               <p className="mt-2 text-gray-600">Carregando...</p>
             </div>
+          ) : activeTab === 'pendentes' ? (
+            // Conteúdo da aba Pendentes
+            <div className="space-y-4">
+              {solicitacoesPendentes.length === 0 ? (
+                <div className="text-center py-8">
+                  <div className="w-16 h-16 bg-yellow-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <div className="w-8 h-8 bg-yellow-500 rounded-full animate-pulse"></div>
+                  </div>
+                  <h4 className="text-lg font-medium text-gray-600 mb-2">Nenhuma solicitação pendente</h4>
+                  <p className="text-gray-500">Solicite recebimentos para ver as pendências aqui</p>
+                </div>
+              ) : (
+                Object.entries(solicitacoesAgrupadas).map(([establishmentId, solicitacoes]) => (
+                  <div key={establishmentId} className="space-y-3">
+                    {/* Header do estabelecimento */}
+                    {solicitacoes[0].establishment_name && (
+                      <div className="flex items-center space-x-2 mb-2">
+                        <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+                        <span className="font-medium text-gray-700 text-sm">
+                          {solicitacoes[0].establishment_name}
+                        </span>
+                        <span className="text-xs text-gray-500">
+                          ({solicitacoes.length} solicitação{solicitacoes.length > 1 ? 'ões' : ''})
+                        </span>
+                      </div>
+                    )}
+                    
+                    {/* Cards das solicitações */}
+                    {solicitacoes.map((solicitacao) => (
+                      <div key={solicitacao.id} className="border border-yellow-200 bg-yellow-50 rounded-lg p-4">
+                        <div className="flex items-center justify-between mb-3">
+                          <div className="flex items-center space-x-3">
+                            <div className="w-3 h-3 bg-yellow-500 rounded-full animate-pulse"></div>
+                            <div>
+                              <span className="font-medium text-yellow-800">Solicitação #{solicitacao.id}</span>
+                            </div>
+                            <Badge className="bg-yellow-100 text-yellow-800 border-yellow-300">
+                              Pendente
+                            </Badge>
+                          </div>
+                          <div className="text-right">
+                            <div className="text-lg font-bold text-yellow-800">
+                              {formatCurrency(solicitacao.total)}
+                            </div>
+                            <div className="text-xs text-yellow-600">
+                              {solicitacao.pedidos_ids.length} pedido{solicitacao.pedidos_ids.length > 1 ? 's' : ''}
+                            </div>
+                          </div>
+                        </div>
+                        
+                        <div className="bg-white border border-yellow-300 rounded-lg p-3 mb-3">
+                          <div className="text-center">
+                            <div className="text-sm text-yellow-600 mb-1">Código de Confirmação</div>
+                            <div className="text-xl font-mono font-bold text-yellow-800 bg-yellow-100 px-3 py-2 rounded">
+                              {solicitacao.codigo_confirmacao || 'CÓDIGO NÃO ENCONTRADO'}
+                            </div>
+                            <div className="text-xs text-yellow-600 mt-1">
+                              Apresente este código ao estabelecimento
+                            </div>
+                          </div>
+                        </div>
+                        
+                        <div className="text-xs text-yellow-700">
+                          <div className="flex items-center space-x-2">
+                            <span>🕒 Criado em: {formatDate(solicitacao.created_at)}</span>
+                            <span>•</span>
+                            <span>⏳ Aguardando confirmação...</span>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ))
+              )}
+            </div>
           ) : pedidos.length === 0 ? (
             <div className="text-center py-8">
               <p className="text-gray-500">Nenhum pedido encontrado</p>
             </div>
           ) : (
             <div className="space-y-3">
-              {pedidos.map(pedido => (
-                <div
-                  key={pedido.id}
-                  className={`border rounded-lg p-4 transition ${
-                    activeTab === 'nao-recebido' && pedido.taxa_recebida === 0
-                      ? 'border-green-200 bg-green-50'
-                      : 'border-gray-200 bg-white'
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center space-x-4">
-                      {activeTab === 'nao-recebido' && (
-                        <input
-                          type="checkbox"
-                          checked={selectedPedidos.includes(pedido.id)}
-                          onChange={() => togglePedido(pedido.id)}
-                          className="w-4 h-4 text-green-600 border-gray-300 rounded focus:ring-green-500"
-                        />
-                      )}
-                      
-                      <div className="flex-1">
-                        <div className="flex items-center space-x-2">
-                          <span className="font-medium text-gray-900">
-                            Pedido #{pedido.order_id}
-                          </span>
-                          <span className="text-sm text-gray-500">
-                            {pedido.customer_name}
-                          </span>
-                        </div>
-                        <div className="text-sm text-gray-600">
-                          {formatDate(pedido.finished_at)}
+              {pedidos.map(pedido => {
+                const temSolicitacaoAtiva = pedidoTemSolicitacaoAtiva(pedido.id);
+                
+                return (
+                  <div
+                    key={pedido.id}
+                    className={`border rounded-lg p-4 transition ${
+                      temSolicitacaoAtiva
+                        ? 'border-orange-200 bg-orange-50 opacity-75'
+                        : activeTab === 'nao-recebido' && pedido.taxa_recebida === 0
+                        ? 'border-green-200 bg-green-50'
+                        : 'border-gray-200 bg-white'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-4">
+                        {activeTab === 'nao-recebido' && !temSolicitacaoAtiva && (
+                          <input
+                            type="checkbox"
+                            checked={selectedPedidos.includes(pedido.id)}
+                            onChange={() => togglePedido(pedido.id)}
+                            className="w-4 h-4 text-green-600 border-gray-300 rounded focus:ring-green-500"
+                          />
+                        )}
+                        {activeTab === 'nao-recebido' && temSolicitacaoAtiva && (
+                          <div className="w-4 h-4 flex items-center justify-center">
+                            <div className="w-3 h-3 bg-orange-500 rounded-full animate-pulse"></div>
+                          </div>
+                        )}
+                        
+                        <div className="flex-1">
+                          <div className="flex items-center space-x-2">
+                            <span className={`font-medium ${
+                              temSolicitacaoAtiva ? 'text-orange-800' : 'text-gray-900'
+                            }`}>
+                              Pedido #{pedido.order_id}
+                            </span>
+                            <span className="text-sm text-gray-500">
+                              {pedido.customer_name}
+                            </span>
+                            {temSolicitacaoAtiva && (
+                              <Badge className="bg-orange-100 text-orange-800 border-orange-300 text-xs">
+                                Solicitação Ativa
+                              </Badge>
+                            )}
+                          </div>
+                          <div className="text-sm text-gray-600">
+                            {formatDate(pedido.finished_at)}
+                          </div>
                         </div>
                       </div>
-                    </div>
 
-                    <div className="text-right">
-                      <div className="text-lg font-bold text-green-600">
-                        {formatCurrency(pedido.delivery_fee)}
-                      </div>
-                      <div className="text-xs text-gray-500">
-                        Taxa de entrega
+                      <div className="text-right">
+                        <Badge className={`font-semibold text-base shadow ${
+                          temSolicitacaoAtiva 
+                            ? 'bg-orange-100 text-orange-800' 
+                            : 'bg-green-100 text-green-800'
+                        }`}>
+                          {formatCurrency(pedido.delivery_fee || 3)}
+                        </Badge>
+                        <div className="text-xs text-gray-500">
+                          Taxa de entrega
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -406,6 +585,19 @@ const Recebimentos = () => {
               <div className="text-sm opacity-90">
                 {selectedPedidos.length} pedido{selectedPedidos.length > 1 ? 's' : ''} selecionado{selectedPedidos.length > 1 ? 's' : ''}
               </div>
+              {/* Mostrar informação sobre estabelecimentos */}
+              {(() => {
+                const pedidosSelecionados = pedidos.filter(p => selectedPedidos.includes(p.id));
+                const estabelecimentosUnicos = new Set(pedidosSelecionados.map(p => p.establishment_id));
+                if (estabelecimentosUnicos.size > 1) {
+                  return (
+                    <div className="text-xs opacity-80 mt-1">
+                      ⚠️ Pedidos de {estabelecimentosUnicos.size} estabelecimentos diferentes - serão criadas solicitações separadas
+                    </div>
+                  );
+                }
+                return null;
+              })()}
             </div>
             
             <button
@@ -421,45 +613,6 @@ const Recebimentos = () => {
 
       {/* FooterBar modernizado */}
       <FooterBar notifications={unreadNotifications} faturamento={todayFaturamento} activeOrders={activeOrders} />
-
-      {/* Modal de Confirmação */}
-      {showConfirmModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
-            <h3 className="text-lg font-bold mb-4">Código de Confirmação</h3>
-            <p className="text-gray-600 mb-4">
-              Use este código para confirmar o recebimento quando o pagamento for realizado:
-            </p>
-            
-            <div className="bg-green-100 border border-green-300 rounded-lg p-4 mb-4">
-              <div className="text-center">
-                <div className="text-2xl font-bold text-green-800 mb-2">
-                  {codigoConfirmacao}
-                </div>
-                <div className="text-sm text-green-600">
-                  Código de confirmação
-                </div>
-              </div>
-            </div>
-
-            <div className="flex space-x-3">
-              <button
-                onClick={() => setShowConfirmModal(false)}
-                className="flex-1 px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition"
-              >
-                Fechar
-              </button>
-              <button
-                onClick={confirmarRecebimento}
-                disabled={confirming}
-                className="flex-1 px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition disabled:opacity-50"
-              >
-                {confirming ? 'Confirmando...' : 'Confirmar Recebimento'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };
