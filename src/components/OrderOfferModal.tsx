@@ -96,6 +96,11 @@ export const OrderOfferModal: React.FC<OrderOfferModalProps> = ({
               {isLoading ? 'Aceitando...' : 'Aceitar Pedido'}
             </Button>
           </div>
+
+          {/* Aviso */}
+          <p className="text-sm text-gray-600 text-center">
+            Este pedido será oferecido para outro entregador se você não aceitar
+          </p>
         </CardContent>
       </Card>
     </div>

@@ -137,7 +137,6 @@ const FaturamentoEstabelecimento = () => {
 
   // Totais
   const totalPedidos = orders.length;
-  const totalValor = orders.reduce((sum: number, o: any) => sum + (Number(o.total_amount) || 0), 0);
   const totalTaxas = orders.reduce((sum: number, o: any) => sum + (Number(o.delivery_fee) || 0), 0);
 
   return (
@@ -156,18 +155,14 @@ const FaturamentoEstabelecimento = () => {
       </header>
 
       {/* Cards de totais minimalistas */}
-      <div className="max-w-2xl w-full mx-auto grid grid-cols-1 md:grid-cols-3 gap-4 mt-6 px-4">
+      <div className="max-w-2xl w-full mx-auto grid grid-cols-1 md:grid-cols-2 gap-4 mt-6 px-4">
         <div className="bg-white rounded-xl border p-4 flex flex-col items-center shadow-sm">
           <span className="text-gray-500 text-xs">Pedidos</span>
           <span className="text-2xl font-bold text-blue-700 mt-1">{totalPedidos}</span>
         </div>
         <div className="bg-white rounded-xl border p-4 flex flex-col items-center shadow-sm">
-          <span className="text-gray-500 text-xs">Valor Total</span>
-          <span className="text-2xl font-bold text-green-700 mt-1">R$ {totalValor.toFixed(2)}</span>
-        </div>
-        <div className="bg-white rounded-xl border p-4 flex flex-col items-center shadow-sm">
-          <span className="text-gray-500 text-xs">Taxas</span>
-          <span className="text-2xl font-bold text-yellow-700 mt-1">R$ {totalTaxas.toFixed(2)}</span>
+          <span className="text-gray-500 text-xs">Total Taxas</span>
+          <span className="text-2xl font-bold text-green-700 mt-1">R$ {totalTaxas.toFixed(2)}</span>
         </div>
       </div>
 
@@ -187,10 +182,6 @@ const FaturamentoEstabelecimento = () => {
             className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-5 py-2 rounded mt-2 md:mt-0 shadow"
             onClick={() => fetchOrders(date)}
           >Filtrar</button>
-          <button
-            className="bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold px-5 py-2 rounded mt-2 md:mt-0 shadow"
-            onClick={() => alert('Solicitação de recebimento enviada!')}
-          >Solicitar recebimento</button>
         </div>
         <div className="bg-white rounded-xl border p-0 md:p-4 overflow-x-auto shadow-sm">
           <h2 className="text-base font-semibold mb-4 text-gray-800 px-4 pt-4">Pedidos entregues</h2>
@@ -205,7 +196,6 @@ const FaturamentoEstabelecimento = () => {
               <thead className="bg-gray-100 sticky top-0 z-10 rounded-lg">
                 <tr>
                   <th className="py-2 px-2 rounded-tl-lg text-sm font-bold text-gray-700">ID</th>
-                  <th className="py-2 px-2 text-sm font-bold text-gray-700">Valor</th>
                   <th className="py-2 px-2 text-sm font-bold text-gray-700">Taxa</th>
                   <th className="py-2 px-2 text-sm font-bold text-gray-700">Entregador</th>
                   <th className="py-2 px-2 rounded-tr-lg text-sm font-bold text-gray-700">Data/Hora</th>
@@ -215,7 +205,6 @@ const FaturamentoEstabelecimento = () => {
                 {orders.map((order: any) => (
                   <tr key={order.order_id} className="bg-white hover:bg-blue-50 transition rounded-lg">
                     <td className="py-2 px-2 font-medium">{order.order_id}</td>
-                    <td className="py-2 px-2">R$ {Number(order.total_amount).toFixed(2)}</td>
                     <td className="py-2 px-2">R$ {Number(order.delivery_fee).toFixed(2)}</td>
                     <td className="py-2 px-2">{order.delivery_name || '-'}</td>
                     <td className="py-2 px-2">{order.finished_at ? new Date(order.finished_at).toLocaleString('pt-BR') : '-'}</td>

@@ -81,16 +81,18 @@ const Index = () => {
   const [showProfileAlert, setShowProfileAlert] = useState(false);
   const navigate = useNavigate();
   const [editMode, setEditMode] = useState(false);
+  
+  // Usar useRef para evitar re-renderizações desnecessárias
   const formRef = useRef({
-    name: deliveryPerson?.name || "",
-    email: deliveryPerson?.email || "",
-    cpf: deliveryPerson?.cpf || "",
-    phone: deliveryPerson?.phone || "",
-    vehicle_type: deliveryPerson?.vehicle_type || "",
-    vehicle_model: deliveryPerson?.vehicle_model || "",
-    has_plate: deliveryPerson?.has_plate || false,
-    plate: deliveryPerson?.plate || "",
-    photo_url: deliveryPerson?.photo_url || "",
+    name: "",
+    email: "",
+    cpf: "",
+    phone: "",
+    vehicle_type: "",
+    vehicle_model: "",
+    has_plate: false,
+    plate: "",
+    photo_url: "",
   });
   
   const [form, setForm] = useState(formRef.current);
@@ -98,39 +100,27 @@ const Index = () => {
   // Função para atualizar o form de forma otimizada
   const updateForm = useCallback((field: string, value: any) => {
     formRef.current = { ...formRef.current, [field]: value };
-    setForm(formRef.current);
+    setForm({ ...formRef.current });
   }, []);
 
   const [todayFaturamento, setTodayFaturamento] = useState(0);
   const [weekFaturamento, setWeekFaturamento] = useState(0);
-  const [offerStatus, setOfferStatus] = useState({ active_offers: 0, max_offers: 3, can_receive_more: true, remaining_slots: 3 });
   const { unreadCount: unreadNotifications, fetchUnreadCount } = useNotifications();
   const audioRef = useRef<HTMLAudioElement | null>(null);
-
-  // Buscar status das ofertas
-  const fetchOfferStatus = useCallback(async () => {
-    try {
-      const response = await api.get('/order-offers/status');
-      setOfferStatus(response.data);
-    } catch (err) {
-      // Erro silencioso
-    }
-  }, []);
 
   // Funções auxiliares otimizadas com useCallback
   const refreshOrders = useCallback(async () => {
     setLoading(true);
     try {
-      const response = await api.get('/order-offers/active');
-      const activeOffers = response.data.filter((offer: any) => !offer.expirada);
+      const response = await api.get('/order-offers');
+      const activeOffers = response.data;
       setPendingOrders(activeOffers);
-      await fetchOfferStatus();
     } catch (err) {
       setPendingOrders([]);
     } finally {
       setLoading(false);
     }
-  }, [fetchOfferStatus]);
+  }, []);
 
   const fetchActiveOrders = useCallback(async () => {
     try {
@@ -199,6 +189,59 @@ const Index = () => {
     }
   }, [editMode]);
 
+  // Atualizar form quando deliveryPerson for carregado
+  useEffect(() => {
+    if (deliveryPerson && !editMode) {
+      const newForm = {
+        name: deliveryPerson?.name || "",
+        email: deliveryPerson?.email || "",
+        cpf: deliveryPerson?.cpf || "",
+        phone: deliveryPerson?.phone || "",
+        vehicle_type: deliveryPerson?.vehicle_type || "",
+        vehicle_model: deliveryPerson?.vehicle_model || "",
+        has_plate: deliveryPerson?.has_plate || false,
+        plate: deliveryPerson?.plate || "",
+        photo_url: deliveryPerson?.photo_url || "",
+      };
+      
+      formRef.current = newForm;
+      setForm(newForm);
+    }
+  }, [deliveryPerson, editMode]);
+
+  // Handlers otimizados para os campos do formulário
+  const handleNameChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    updateForm('name', e.target.value);
+  }, [updateForm]);
+
+  const handleEmailChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    updateForm('email', e.target.value);
+  }, [updateForm]);
+
+  const handlePhoneChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    updateForm('phone', e.target.value);
+  }, [updateForm]);
+
+  const handleCpfChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    updateForm('cpf', e.target.value);
+  }, [updateForm]);
+
+  const handleVehicleTypeChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
+    updateForm('vehicle_type', e.target.value);
+  }, [updateForm]);
+
+  const handleVehicleModelChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    updateForm('vehicle_model', e.target.value);
+  }, [updateForm]);
+
+  const handlePlateChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    updateForm('plate', e.target.value);
+  }, [updateForm]);
+
+  const handleHasPlateChange = useCallback((checked: boolean) => {
+    updateForm('has_plate', checked);
+  }, [updateForm]);
+
   const fetchHistory = useCallback(async () => {
     try {
       const response = await api.get('/delivery-history');
@@ -215,8 +258,12 @@ const Index = () => {
       toast.success("Oferta aceita com sucesso!");
       refreshOrders();
       fetchActiveOrders();
-    } catch (err) {
-      toast.error("Erro ao aceitar oferta");
+    } catch (err: any) {
+      if (err.response?.status === 400 && err.response?.data?.message?.includes('6 pedidos')) {
+        toast.error("Você já tem 6 pedidos em andamento. Finalize alguns pedidos antes de aceitar novos.");
+      } else {
+        toast.error("Erro ao aceitar oferta");
+      }
     }
   };
 
@@ -392,11 +439,10 @@ const Index = () => {
 
       setLoading(true);
       try {
-        const response = await api.get('/order-offers/active');
-        const activeOffers = response.data.filter((offer: any) => !offer.expirada);
+        const response = await api.get('/order-offers');
+        const activeOffers = response.data;
         
         setPendingOrders(activeOffers);
-        await fetchOfferStatus();
       } catch (err) {
         // Erro ao buscar ofertas:
       } finally {
@@ -434,9 +480,9 @@ const Index = () => {
         // Atualizar ofertas apenas se necessário
         if (isAvailable) {
           try {
-            const response = await api.get('/order-offers/active');
-            const activeOffers = response.data.filter((offer: any) => !offer.expirada);
-            setPendingOrders(activeOffers);
+            const response = await api.get('/order-offers');
+            const newOffers = response.data;
+            setPendingOrders(newOffers);
           } catch (err) {
             // Erro ao buscar ofertas via WebSocket:
           }
@@ -640,18 +686,15 @@ const Index = () => {
                 <div className="text-center py-12">
                   <Package className="h-12 w-12 text-gray-300 mx-auto mb-4" />
                   <h4 className="text-lg font-medium text-gray-600 mb-2">
-                    {!offerStatus.can_receive_more ? 'Limite de ofertas atingido' : 'Nenhum pedido disponível'}
+                    Nenhum pedido disponível
                   </h4>
                   <p className="text-gray-500">
-                    {!offerStatus.can_receive_more 
-                      ? 'Você já tem 3 ofertas ativas. Aguarde elas expirarem ou serem aceitas.'
-                      : 'Aguarde novos pedidos chegarem...'
-                    }
+                    Aguarde novos pedidos chegarem...
                   </p>
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {pendingOrders.map((offer) => {
+                  {pendingOrders.slice(0, 3).map((offer) => {
                     return (
                       <Card 
                         key={offer.offer_id} 
@@ -851,7 +894,7 @@ const Index = () => {
             const formData = new FormData();
             formData.append('photo', file);
             
-            const response = await api.post('/delivery-person/upload-photo', formData, {
+            const response = await api.post('/upload/profile-photo', formData, {
               headers: { 'Content-Type': 'multipart/form-data' }
             });
             
@@ -948,7 +991,7 @@ const Index = () => {
                 <Input
                   id="name"
                   value={form.name}
-                  onChange={(e) => updateForm('name', e.target.value)}
+                  onChange={handleNameChange}
                   disabled={!editMode}
                   className="mt-1"
                 />
@@ -959,7 +1002,7 @@ const Index = () => {
                   id="email"
                   type="email"
                   value={form.email}
-                  onChange={(e) => updateForm('email', e.target.value)}
+                  onChange={handleEmailChange}
                   disabled={!editMode}
                   className="mt-1"
                 />
@@ -969,7 +1012,7 @@ const Index = () => {
                 <Input
                   id="phone"
                   value={form.phone}
-                  onChange={(e) => updateForm('phone', e.target.value)}
+                  onChange={handlePhoneChange}
                   disabled={!editMode}
                   className="mt-1"
                 />
@@ -979,7 +1022,7 @@ const Index = () => {
                 <Input
                   id="cpf"
                   value={form.cpf}
-                  onChange={(e) => updateForm('cpf', e.target.value)}
+                  onChange={handleCpfChange}
                   disabled={!editMode}
                   className="mt-1"
                 />
@@ -998,7 +1041,7 @@ const Index = () => {
                   <select
                     id="vehicle_type"
                     value={form.vehicle_type}
-                    onChange={(e) => updateForm('vehicle_type', e.target.value)}
+                    onChange={handleVehicleTypeChange}
                     disabled={!editMode}
                     className="mt-1 block w-full rounded-md border border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 disabled:bg-gray-100 px-3 py-2"
                   >
@@ -1013,7 +1056,7 @@ const Index = () => {
                   <Input
                     id="vehicle_model"
                     value={form.vehicle_model}
-                    onChange={(e) => updateForm('vehicle_model', e.target.value)}
+                    onChange={handleVehicleModelChange}
                     disabled={!editMode}
                     className="mt-1"
                   />
@@ -1022,7 +1065,7 @@ const Index = () => {
                   <Switch
                     id="has_plate"
                     checked={form.has_plate}
-                    onCheckedChange={(checked) => updateForm('has_plate', checked)}
+                    onCheckedChange={handleHasPlateChange}
                     disabled={!editMode}
                   />
                   <Label htmlFor="has_plate">Possui Placa</Label>
@@ -1033,7 +1076,7 @@ const Index = () => {
                     <Input
                       id="plate"
                       value={form.plate}
-                      onChange={(e) => updateForm('plate', e.target.value)}
+                      onChange={handlePlateChange}
                       disabled={!editMode}
                       className="mt-1"
                     />

@@ -145,9 +145,9 @@ const Faturamento = () => {
     <div className="max-w-xl mx-auto p-4 pb-24">
       <h1 className="text-xl md:text-2xl font-bold mb-3">Faturamento por Estabelecimento</h1>
       <div className="bg-green-500 text-white rounded-xl p-4 md:p-5 mb-5 flex flex-col items-center min-h-[110px] md:min-h-[120px] justify-center">
-        <span className="text-base md:text-lg font-semibold">Total do Período</span>
-        <span className="text-2xl md:text-3xl font-bold">R$ {Number(data.total_amount).toFixed(2)}</span>
-        <span className="text-xs md:text-sm mt-1">Faturamento do período selecionado</span>
+        <span className="text-base md:text-lg font-semibold">Total de Taxas do Período</span>
+        <span className="text-2xl md:text-3xl font-bold">R$ {Number(data.total_delivery_fee).toFixed(2)}</span>
+        <span className="text-xs md:text-sm mt-1">Taxas de entrega do período selecionado</span>
       </div>
       <div className="bg-white rounded-lg shadow p-3 mb-4">
         <label className="block mb-2 font-medium text-sm text-gray-800 text-center">Intervalo de datas <span className='text-gray-400'>(máx. 31 dias)</span>:</label>
@@ -192,7 +192,6 @@ const Faturamento = () => {
             <thead>
               <tr>
                 <th className="py-2">Estabelecimento</th>
-                <th className="py-2">Total Pedidos</th>
                 <th className="py-2">Total Taxas</th>
               </tr>
             </thead>
@@ -204,7 +203,6 @@ const Faturamento = () => {
                   onClick={() => navigate(`/faturamento/estabelecimento/${est.establishment_id}`)}
                 >
                   <td className="py-2 font-medium">{est.establishment_name}</td>
-                  <td className="py-2">{est.total_orders}</td>
                   <td className="py-2">R$ {Number(est.total_delivery_fee).toFixed(2)}</td>
                 </tr>
               ))}

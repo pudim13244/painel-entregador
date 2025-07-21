@@ -251,7 +251,7 @@ const Recebimentos = () => {
         const pedidosIds = pedidosEstabelecimento.map(p => p.id);
         const total = pedidosEstabelecimento.reduce((sum, p) => sum + Number(p.delivery_fee || 3), 0);
         
-        const response = await api.post('/recebimentos/solicitar', {
+      const response = await api.post('/recebimentos/solicitar', {
           pedidos_ids: pedidosIds
         });
         
@@ -506,55 +506,55 @@ const Recebimentos = () => {
                 const temSolicitacaoAtiva = pedidoTemSolicitacaoAtiva(pedido.id);
                 
                 return (
-                  <div
-                    key={pedido.id}
-                    className={`border rounded-lg p-4 transition ${
+                <div
+                  key={pedido.id}
+                  className={`border rounded-lg p-4 transition ${
                       temSolicitacaoAtiva
                         ? 'border-orange-200 bg-orange-50 opacity-75'
                         : activeTab === 'nao-recebido' && pedido.taxa_recebida === 0
-                        ? 'border-green-200 bg-green-50'
-                        : 'border-gray-200 bg-white'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center space-x-4">
+                      ? 'border-green-200 bg-green-50'
+                      : 'border-gray-200 bg-white'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-4">
                         {activeTab === 'nao-recebido' && !temSolicitacaoAtiva && (
-                          <input
-                            type="checkbox"
-                            checked={selectedPedidos.includes(pedido.id)}
-                            onChange={() => togglePedido(pedido.id)}
-                            className="w-4 h-4 text-green-600 border-gray-300 rounded focus:ring-green-500"
-                          />
-                        )}
+                        <input
+                          type="checkbox"
+                          checked={selectedPedidos.includes(pedido.id)}
+                          onChange={() => togglePedido(pedido.id)}
+                          className="w-4 h-4 text-green-600 border-gray-300 rounded focus:ring-green-500"
+                        />
+                      )}
                         {activeTab === 'nao-recebido' && temSolicitacaoAtiva && (
                           <div className="w-4 h-4 flex items-center justify-center">
                             <div className="w-3 h-3 bg-orange-500 rounded-full animate-pulse"></div>
                           </div>
                         )}
-                        
-                        <div className="flex-1">
-                          <div className="flex items-center space-x-2">
+                      
+                      <div className="flex-1">
+                        <div className="flex items-center space-x-2">
                             <span className={`font-medium ${
                               temSolicitacaoAtiva ? 'text-orange-800' : 'text-gray-900'
                             }`}>
-                              Pedido #{pedido.order_id}
-                            </span>
-                            <span className="text-sm text-gray-500">
-                              {pedido.customer_name}
-                            </span>
+                            Pedido #{pedido.order_id}
+                          </span>
+                          <span className="text-sm text-gray-500">
+                            {pedido.customer_name}
+                          </span>
                             {temSolicitacaoAtiva && (
                               <Badge className="bg-orange-100 text-orange-800 border-orange-300 text-xs">
                                 Solicitação Ativa
                               </Badge>
                             )}
-                          </div>
-                          <div className="text-sm text-gray-600">
-                            {formatDate(pedido.finished_at)}
-                          </div>
+                        </div>
+                        <div className="text-sm text-gray-600">
+                          {formatDate(pedido.finished_at)}
                         </div>
                       </div>
+                    </div>
 
-                      <div className="text-right">
+                    <div className="text-right">
                         <Badge className={`font-semibold text-base shadow ${
                           temSolicitacaoAtiva 
                             ? 'bg-orange-100 text-orange-800' 
@@ -562,12 +562,12 @@ const Recebimentos = () => {
                         }`}>
                           {formatCurrency(pedido.delivery_fee || 3)}
                         </Badge>
-                        <div className="text-xs text-gray-500">
-                          Taxa de entrega
-                        </div>
+                      <div className="text-xs text-gray-500">
+                        Taxa de entrega
                       </div>
                     </div>
                   </div>
+                </div>
                 );
               })}
             </div>
